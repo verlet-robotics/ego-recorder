@@ -26,6 +26,14 @@
 
 **Estimated compression:** ~350-470 MB/min (5-7x vs raw)
 
+**Plans:** 4 plans
+
+Plans:
+- [ ] 01-01-PLAN.md -- CMake project scaffold, frame types, bounded queue, compression wrappers
+- [ ] 01-02-PLAN.md -- Binary container format, file writer, signal handler, stats tracker
+- [ ] 01-03-PLAN.md -- RealSense pipeline wrapper with IMU detection and intrinsics
+- [ ] 01-04-PLAN.md -- Main orchestration, CLI, thread wiring, end-to-end verification
+
 **Success criteria:**
 - [ ] Records 640x480 RGB+depth at sustained 30fps with 0 dropped frames
 - [ ] Memory usage stays constant (<200MB RSS) during 10-minute recording
