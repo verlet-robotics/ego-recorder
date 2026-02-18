@@ -1,0 +1,9 @@
+{
+  "mode": "yolo",
+  "depth": "quick",
+  "execution": "parallel",
+  "commit_docs": true,
+  "researcher_model": "opus",
+  "synthesizer_model": "opus",
+  "roadmapper_model": "opus"
+}
