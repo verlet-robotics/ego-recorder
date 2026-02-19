@@ -38,6 +38,9 @@
 | turbojpeg install | TURBOJPEG_LOCAL_PREFIX cmake option for extracted .deb | 2026-02-19 |
 | Pipeline-storage coupling | No binary_format.h in pipeline.h; getters expose raw metadata for main.cpp to assemble FileHeader | 2026-02-19 |
 | IMU detection | rs2::error try/catch: D435i gets accel+gyro, D435 falls back to RGB+depth only | 2026-02-19 |
+| FileWriter write buffer | 256KB pubsetbuf() reduces syscall frequency on sequential frame appends | 2026-02-19 |
+| Stats atomic ordering | memory_order_relaxed for stats counters -- stale reads within display interval are acceptable | 2026-02-19 |
+| sigwait signal handling | Detached sigwait thread with pthread_sigmask -- avoids all async-signal-safety issues vs signal()/sigaction() | 2026-02-19 |
 
 ---
 
@@ -57,6 +60,7 @@
 |---------|------|----------|-------|---------|
 | 2026-02-19 | 01-01 | ~5 min | 2/2 | d4b3ffe, 5586db1 |
 | 2026-02-19 | 01-03 | ~2 min | 1/1 | 14795a3 |
+| 2026-02-19 | 01-02 | ~4 min | 2/2 | c6d20f8, 651a086 |
 
 ---
 
