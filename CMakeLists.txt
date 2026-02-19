@@ -130,8 +130,8 @@ add_executable(ego-recorder
     src/utils/signal_handler.cpp
     src/utils/stats.cpp
     src/config/config.cpp
+    src/presenter/headless_presenter.cpp
     # src/presenter/gui_presenter.cpp   -- added in plan 02-02 (WITH_GUI only)
-    # src/presenter/headless_presenter.cpp -- added in plan 02-03
 )
 
 target_include_directories(ego-recorder PRIVATE src)
