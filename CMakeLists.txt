@@ -8,13 +8,32 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Allow user to specify a local turbojpeg prefix (for systems where
 # libturbojpeg0-dev is not system-installed but the .deb has been extracted).
 # Usage: cmake -DTURBOJPEG_LOCAL_PREFIX=/path/to/extracted/usr ..
+#
+# The patched pkg-config file /tmp/turbojpeg-pkgconfig/libturbojpeg.pc should
+# also exist with correct prefix= set to TURBOJPEG_LOCAL_PREFIX.
 if(DEFINED TURBOJPEG_LOCAL_PREFIX)
-    list(PREPEND CMAKE_PREFIX_PATH "${TURBOJPEG_LOCAL_PREFIX}")
-    list(PREPEND CMAKE_INCLUDE_PATH "${TURBOJPEG_LOCAL_PREFIX}/include")
-    list(PREPEND CMAKE_LIBRARY_PATH "${TURBOJPEG_LOCAL_PREFIX}/lib/x86_64-linux-gnu"
-                                    "${TURBOJPEG_LOCAL_PREFIX}/lib")
-    # Make pkg-config look in the local prefix first
-    set(ENV{PKG_CONFIG_PATH} "${TURBOJPEG_LOCAL_PREFIX}/lib/x86_64-linux-gnu/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+    # Point pkg-config to a patched .pc file directory with correct absolute paths.
+    # The patched file is typically at /tmp/turbojpeg-pkgconfig/libturbojpeg.pc
+    # (created alongside the extracted deb) or we generate it here from scratch.
+    set(TURBOJPEG_PKGCONFIG_DIR "${CMAKE_BINARY_DIR}/turbojpeg-pkgconfig")
+    file(MAKE_DIRECTORY "${TURBOJPEG_PKGCONFIG_DIR}")
+    set(TURBOJPEG_LIBDIR "${TURBOJPEG_LOCAL_PREFIX}/lib/x86_64-linux-gnu")
+    # Fallback: if arch lib dir doesn't exist, try plain lib/
+    if(NOT EXISTS "${TURBOJPEG_LIBDIR}")
+        set(TURBOJPEG_LIBDIR "${TURBOJPEG_LOCAL_PREFIX}/lib")
+    endif()
+    file(WRITE "${TURBOJPEG_PKGCONFIG_DIR}/libturbojpeg.pc"
+        "prefix=${TURBOJPEG_LOCAL_PREFIX}\n"
+        "libdir=${TURBOJPEG_LIBDIR}\n"
+        "includedir=${TURBOJPEG_LOCAL_PREFIX}/include\n"
+        "\n"
+        "Name: libturbojpeg\n"
+        "Description: TurboJPEG (local extract)\n"
+        "Version: 2.1.5\n"
+        "Libs: -L${TURBOJPEG_LIBDIR} -lturbojpeg\n"
+        "Cflags: -I${TURBOJPEG_LOCAL_PREFIX}/include\n"
+    )
+    set(ENV{PKG_CONFIG_PATH} "${TURBOJPEG_PKGCONFIG_DIR}:$ENV{PKG_CONFIG_PATH}")
     message(STATUS "Using local TurboJPEG prefix: ${TURBOJPEG_LOCAL_PREFIX}")
 endif()
 
