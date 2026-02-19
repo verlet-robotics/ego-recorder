@@ -1,0 +1,66 @@
+# ego-recorder configuration file
+#
+# Copy this file to config.toml and pass it with --config config.toml
+# All settings are optional -- missing keys use the defaults shown below.
+
+# ---------------------------------------------------------------------------
+# [output] -- Where recordings are saved
+# ---------------------------------------------------------------------------
+[output]
+
+# Directory where .egorec files are written.
+# Default: "." (current working directory)
+# Example: "/mnt/ssd/recordings"
+dir = "."
+
+# Prefix used in output filenames: {session_name}_{YYYYMMDD_HHMMSS}.egorec
+# Default: "capture"
+session_name = "capture"
+
+# ---------------------------------------------------------------------------
+# [compression] -- Codec parameters
+# ---------------------------------------------------------------------------
+[compression]
+
+# JPEG quality for RGB frames.
+# Range: 1 (worst quality, smallest files) to 100 (best quality, largest files)
+# Default: 90  -- good balance for ML training data
+# Tip: 80-85 saves ~15% space with minimal visual quality loss
+jpeg_quality = 90
+
+# ZSTD compression level for depth frames.
+# Range: 1 (fastest, ~3-4x compression) to 22 (slowest, best ratio)
+# Default: 1  -- fastest, <0.5ms/frame, adequate for real-time capture
+# Tip: level 3 adds ~1ms but improves ratio to ~4-5x
+zstd_level = 1
+
+# ---------------------------------------------------------------------------
+# [recording] -- Capture pipeline settings
+# ---------------------------------------------------------------------------
+[recording]
+
+# Minimum free disk space in MB before recording stops automatically.
+# Default: 500  (stop when less than 500 MB free)
+# Increase for longer sessions on nearly-full drives.
+disk_min_mb = 500
+
+# Bounded queue depth between capture thread and writer thread.
+# Range: 2 to 16
+# Default: 4  -- handles burst latency without consuming too much RAM
+# Each slot holds ~1.5 MB (640x480 RGB24 + Z16), so 4 slots = ~6 MB
+queue_size = 4
+
+# Number of frames to skip at startup for camera auto-exposure to settle.
+# Default: 30  (~1 second at 30fps)
+# Increase if the first frames look under/over exposed.
+warmup_frames = 30
+
+# ---------------------------------------------------------------------------
+# [service] -- Service mode settings
+# ---------------------------------------------------------------------------
+[service]
+
+# Run in headless mode (no GUI window).
+# Set to true when running as a systemd service or over SSH.
+# Default: false  (show Dear ImGui GUI if compiled with -DWITH_GUI=ON)
+headless = false
