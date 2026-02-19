@@ -1,8 +1,9 @@
 # Project State: RealSense Ego Recorder
 
 **Last updated:** 2026-02-19
-**Current phase:** Not started
-**Next action:** `/gsd:plan-phase 1`
+**Current phase:** 01-core-capture-engine-mvp-storage
+**Current plan:** 01 of 4 complete
+**Next action:** Execute plan 02 (`/gsd:execute-phase 01-core-capture-engine-mvp-storage 02`)
 
 ---
 
@@ -10,7 +11,7 @@
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 1 | NOT STARTED | Core capture engine + MVP storage |
+| 1 | IN PROGRESS (1/4 plans done) | Core capture engine + MVP storage |
 | 2 | NOT STARTED | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
@@ -31,6 +32,10 @@
 | Export formats | RLDS TFRecord + LeRobot v3 | 2026-02-19 |
 | Workflow mode | YOLO, Quick depth, Parallel execution | 2026-02-19 |
 | Data strategy | Build recorder first, annotations later | 2026-02-19 |
+| JPEG subsampling | TJSAMP_420 (4:2:0) -- 30% smaller, adequate for ML training | 2026-02-19 |
+| ZSTD level | Level 1 (fastest, <0.5ms/frame, ~3-4x on depth) | 2026-02-19 |
+| Queue policy | BoundedQueue drop-oldest so capture thread never blocks | 2026-02-19 |
+| turbojpeg install | TURBOJPEG_LOCAL_PREFIX cmake option for extracted .deb | 2026-02-19 |
 
 ---
 
@@ -44,6 +49,14 @@
 
 ---
 
+## Execution Sessions
+
+| Session | Plan | Duration | Tasks | Commits |
+|---------|------|----------|-------|---------|
+| 2026-02-19 | 01-01 | ~5 min | 2/2 | d4b3ffe, 5586db1 |
+
+---
+
 ## Blockers
 
 None.
@@ -54,4 +67,6 @@ None.
 
 - D435 has no IMU. Code will detect IMU at runtime for future D435i support.
 - Raw ego video without annotations has low VLA training value. Annotation strategy deferred.
-- Depth is stored but not yet used by current VLMs — forward-looking differentiator.
+- Depth is stored but not yet used by current VLMs -- forward-looking differentiator.
+- `libturbojpeg0-dev` not system-installed on dev machine. Use `TURBOJPEG_LOCAL_PREFIX` cmake option or `sudo apt install libturbojpeg0-dev`. See 01-01-SUMMARY.md for workaround details.
+- realsense2 is installed via ROS Jazzy at `/opt/ros/jazzy`. Pass `-DCMAKE_PREFIX_PATH="/opt/ros/jazzy"` to cmake.
