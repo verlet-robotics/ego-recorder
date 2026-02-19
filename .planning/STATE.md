@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-02-19
 **Current phase:** 02-gui-mode-headless-systemd-service
-**Current plan:** 4 of 4 (tasks 1-2 complete, awaiting human verification checkpoint Task 3)
-**Next action:** Human verification of GUI and headless modes with physical camera (02-04 Task 3 checkpoint)
+**Current plan:** 4 of 4 (COMPLETE)
+**Next action:** Phase 2 complete. Begin Phase 3 (Optimized compression + export tools).
 
 ---
 
@@ -12,7 +12,7 @@
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
-| 2 | IN PROGRESS (4/4 code complete, human-verify checkpoint pending) | GUI mode + headless systemd service |
+| 2 | COMPLETE (4/4 plans done, physical camera verified) | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
 ---
@@ -59,6 +59,8 @@
 | on_reconnect_requested wiring | Lambda in main captures camera by ref: destroy+500ms+recreate+presenter notify+new recording file | 2026-02-19 |
 | Headless USB auto-retry | camera.reset() + sleep(500ms) + make_unique<RealSensePipeline>() loop every 2s in capture thread | 2026-02-19 |
 | Config+CLI merge | load_config() first, then cxxopts count() > 0 guards CLI overrides; 0-sentinel for numeric flags | 2026-02-19 |
+| Headless filename add_timestamp_suffix | make_output_path() takes add_timestamp_suffix=false for headless; session name already has timestamp from make_session_name() | 2026-02-19 |
+| Physical camera verification | D435 verified at ~27fps GUI / ~25fps headless, 0 dropped frames, clean shutdown, double-timestamp bug fixed | 2026-02-19 |
 
 ---
 
@@ -83,7 +85,7 @@
 | 2026-02-19 | 02-01 | ~2 min | 2/2 | 92fa579, 2708cf4 |
 | 2026-02-19 | 02-02 | ~8 min | 1/1 | 90a9dd8 |
 | 2026-02-19 | 02-03 | ~3 min | 2/2 | 2dfae82, 30f4b67 |
-| 2026-02-19 | 02-04 | ~3 min | 2/3 (checkpoint) | 17f77a9, 8e6e3e5 |
+| 2026-02-19 | 02-04 | ~35 min | 3/3 | 17f77a9, 8e6e3e5, bb265cd |
 
 ---
 
