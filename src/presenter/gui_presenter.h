@@ -86,16 +86,14 @@ private:
     // ---- View mode ----
     enum class ViewMode { RGB_ONLY, DEPTH_ONLY, SIDE_BY_SIDE };
 
-    // ---- Jet colormap helper ----
-    /// Convert Z16 depth pixels to RGB jet colormap (blue=near, red=far).
-    void z16_to_jet_rgb(
+    // ---- Depth colorization helper ----
+    /// Convert Z16 depth pixels to RGB using turbo colormap with histogram equalization.
+    /// Auto-ranges to 2nd-98th percentile of non-zero depth values per frame.
+    void colorize_depth(
         const uint16_t* depth,
         uint8_t*        out_rgb,
         int             width,
-        int             height,
-        float           depth_scale,
-        float           near_m = 0.1f,
-        float           far_m  = 10.0f
+        int             height
     );
 
     // ---- Config / callbacks ----
