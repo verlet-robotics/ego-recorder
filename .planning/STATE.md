@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-02-19
 **Current phase:** 01-core-capture-engine-mvp-storage
-**Current plan:** 01 of 4 complete
-**Next action:** Execute plan 02 (`/gsd:execute-phase 01-core-capture-engine-mvp-storage 02`)
+**Current plan:** 03 of 4 complete
+**Next action:** Execute plan 04 (`/gsd:execute-phase 01-core-capture-engine-mvp-storage 04`)
 
 ---
 
@@ -11,7 +11,7 @@
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 1 | IN PROGRESS (1/4 plans done) | Core capture engine + MVP storage |
+| 1 | IN PROGRESS (3/4 plans done) | Core capture engine + MVP storage |
 | 2 | NOT STARTED | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
@@ -36,6 +36,8 @@
 | ZSTD level | Level 1 (fastest, <0.5ms/frame, ~3-4x on depth) | 2026-02-19 |
 | Queue policy | BoundedQueue drop-oldest so capture thread never blocks | 2026-02-19 |
 | turbojpeg install | TURBOJPEG_LOCAL_PREFIX cmake option for extracted .deb | 2026-02-19 |
+| Pipeline-storage coupling | No binary_format.h in pipeline.h; getters expose raw metadata for main.cpp to assemble FileHeader | 2026-02-19 |
+| IMU detection | rs2::error try/catch: D435i gets accel+gyro, D435 falls back to RGB+depth only | 2026-02-19 |
 
 ---
 
@@ -54,6 +56,7 @@
 | Session | Plan | Duration | Tasks | Commits |
 |---------|------|----------|-------|---------|
 | 2026-02-19 | 01-01 | ~5 min | 2/2 | d4b3ffe, 5586db1 |
+| 2026-02-19 | 01-03 | ~2 min | 1/1 | 14795a3 |
 
 ---
 
