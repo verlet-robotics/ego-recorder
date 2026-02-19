@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-02-19
 **Current phase:** 02-gui-mode-headless-systemd-service
-**Current plan:** 1 of 4 complete
-**Next action:** Execute plan 02-02 (GuiPresenter implementation)
+**Current plan:** 2 of 4 complete
+**Next action:** Execute plan 02-03 (HeadlessPresenter implementation)
 
 ---
 
@@ -47,6 +47,10 @@
 | IPresenter interface | Strategy pattern: start/tick/shutdown lifecycle + camera events + update_stats | 2026-02-19 |
 | Config loading | toml++ value_or() fallbacks; parse_error -> stderr warning + defaults | 2026-02-19 |
 | CMake GUI gating | WITH_GUI=ON: Dear ImGui v1.92.6 + GLFW + OpenGL; toml++ always linked | 2026-02-19 |
+| GuiPresenter frame buffer | std::mutex + memcpy per tick: minimal lock hold, adequate for 30fps capture vs 60fps render | 2026-02-19 |
+| Jet colormap orientation | blue=near (t=0), red=far (t=1) -- standard jet, invalid depth=black | 2026-02-19 |
+| ImGui flag correction | NoBringToDisplayFront does not exist in v1.92.6; correct is NoBringToFrontOnFocus | 2026-02-19 |
+| gui_presenter.cpp cmake | Compiled via target_sources inside if(WITH_GUI) block -- not unconditionally with HAVE_GUI guard | 2026-02-19 |
 
 ---
 
@@ -69,6 +73,7 @@
 | 2026-02-19 | 01-02 | ~4 min | 2/2 | c6d20f8, 651a086 |
 | 2026-02-19 | 01-04 | ~15 min | 2/2 | a02dd98 |
 | 2026-02-19 | 02-01 | ~2 min | 2/2 | 92fa579, 2708cf4 |
+| 2026-02-19 | 02-02 | ~8 min | 1/1 | 90a9dd8 |
 
 ---
 
