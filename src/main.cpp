@@ -97,21 +97,35 @@ static std::string make_date_dir(const std::string& output_dir) {
     return path;
 }
 
-/// Generate output filepath: {dir}/{session}_{YYYYMMDD_HHMMSS}.egorec
+/// Generate output filepath.
+///
+/// When add_timestamp_suffix is true (GUI mode):
+///   {dir}/{session}_{YYYYMMDD_HHMMSS}.egorec
+///
+/// When add_timestamp_suffix is false (headless mode):
+///   {dir}/{session}.egorec
+///
+/// In headless mode, make_session_name() already embeds the timestamp inside
+/// the session name (e.g. "capture_20260219_090520"), so appending a second
+/// timestamp would produce a double-timestamp filename.
 static std::string make_output_path(const std::string& output_dir,
-                                    const std::string& session_name) {
-    std::time_t now = std::time(nullptr);
-    std::tm* tm_info = std::localtime(&now);
-    char ts[32];
-    std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", tm_info);
-
+                                    const std::string& session_name,
+                                    bool add_timestamp_suffix = true) {
     std::string path = output_dir;
     if (!path.empty() && path.back() != '/') {
         path += '/';
     }
     path += session_name;
-    path += '_';
-    path += ts;
+
+    if (add_timestamp_suffix) {
+        std::time_t now = std::time(nullptr);
+        std::tm* tm_info = std::localtime(&now);
+        char ts[32];
+        std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", tm_info);
+        path += '_';
+        path += ts;
+    }
+
     path += ".egorec";
     return path;
 }
@@ -360,8 +374,15 @@ int main(int argc, char* argv[]) {
         // ---- Helper lambdas ------------------------------------------------
 
         /// Open a new FileWriter and start the writer thread.
-        auto start_recording = [&](const std::string& sname, const std::string& out_dir) {
-            const std::string filepath = make_output_path(out_dir, sname);
+        ///
+        /// add_timestamp_suffix controls whether a second timestamp is appended
+        /// to the session name in the output filename. Set to false for headless
+        /// mode where the session name already contains a timestamp from
+        /// make_session_name(), to avoid double-timestamp filenames like
+        /// "capture_20260219_090520_20260219_090522.egorec".
+        auto start_recording = [&](const std::string& sname, const std::string& out_dir,
+                                   bool add_timestamp_suffix = true) {
+            const std::string filepath = make_output_path(out_dir, sname, add_timestamp_suffix);
             fprintf(stderr, "Recording to: %s\n", filepath.c_str());
 
             // Create new queue and writer
@@ -537,7 +558,9 @@ int main(int argc, char* argv[]) {
 
         // ---- For headless mode: start recording immediately ----------------
         if (config.headless) {
-            start_recording(session_name, output_dir);
+            // Pass false: session_name already contains a timestamp from
+            // make_session_name(), so no second timestamp should be appended.
+            start_recording(session_name, output_dir, /*add_timestamp_suffix=*/false);
             fprintf(stderr, "Press Ctrl+C to stop recording.\n\n");
         }
 
@@ -617,8 +640,12 @@ int main(int argc, char* argv[]) {
                         if (reconnected && !shutdown_flag.load()) {
                             camera_disconnected.store(false, std::memory_order_release);
                             presenter->on_camera_reconnect();
-                            // Open new recording file
-                            start_recording(session_name, output_dir);
+                            // Open new recording file after reconnect.
+                            // Generate a fresh session name with the current
+                            // timestamp so each reconnect produces a distinct file.
+                            session_name = make_session_name();
+                            start_recording(session_name, output_dir,
+                                            /*add_timestamp_suffix=*/false);
                         }
                     } else {
                         // GUI mode: notify presenter (shows banner + Reconnect button)
