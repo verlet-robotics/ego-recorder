@@ -61,6 +61,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cxxopts)
 
+# toml++ via FetchContent (always built -- both GUI and headless need config)
+FetchContent_Declare(
+    tomlplusplus
+    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+    GIT_TAG        v3.4.0
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 # Optional systemd support
 option(WITH_SYSTEMD "Enable systemd sd_notify watchdog support" ON)
 if(WITH_SYSTEMD)
@@ -73,6 +81,44 @@ if(WITH_SYSTEMD)
     endif()
 endif()
 
+# Optional Dear ImGui GUI mode
+# Requires: libglfw3-dev, libgl-dev (or mesa-common-dev)
+# Disable with: cmake -DWITH_GUI=OFF ..
+option(WITH_GUI "Build Dear ImGui GUI mode" ON)
+if(WITH_GUI)
+    find_package(OpenGL REQUIRED)
+    find_package(glfw3 REQUIRED)
+
+    FetchContent_Declare(
+        imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG        v1.92.6
+    )
+    FetchContent_MakeAvailable(imgui)
+
+    # Build Dear ImGui as a static library with GLFW + OpenGL3 backend
+    add_library(imgui_glfw_opengl3 STATIC
+        ${imgui_SOURCE_DIR}/imgui.cpp
+        ${imgui_SOURCE_DIR}/imgui_draw.cpp
+        ${imgui_SOURCE_DIR}/imgui_tables.cpp
+        ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+        ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+    )
+    target_include_directories(imgui_glfw_opengl3 PUBLIC
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
+        ${imgui_SOURCE_DIR}/misc/cpp
+    )
+    target_link_libraries(imgui_glfw_opengl3 PUBLIC glfw OpenGL::GL)
+
+    add_compile_definitions(HAVE_GUI)
+    message(STATUS "GUI support: enabled (Dear ImGui v1.92.6)")
+else()
+    message(STATUS "GUI support: disabled (-DWITH_GUI=OFF)")
+endif()
+
 # ---- Sources ----
 
 add_executable(ego-recorder
@@ -83,6 +129,9 @@ add_executable(ego-recorder
     src/storage/file_writer.cpp
     src/utils/signal_handler.cpp
     src/utils/stats.cpp
+    src/config/config.cpp
+    # src/presenter/gui_presenter.cpp   -- added in plan 02-02 (WITH_GUI only)
+    # src/presenter/headless_presenter.cpp -- added in plan 02-03
 )
 
 target_include_directories(ego-recorder PRIVATE src)
@@ -92,11 +141,16 @@ target_link_libraries(ego-recorder PRIVATE
     PkgConfig::TURBOJPEG
     PkgConfig::ZSTD
     cxxopts::cxxopts
+    tomlplusplus::tomlplusplus
     pthread
 )
 
 if(WITH_SYSTEMD AND SYSTEMD_FOUND)
     target_link_libraries(ego-recorder PRIVATE PkgConfig::SYSTEMD)
+endif()
+
+if(WITH_GUI)
+    target_link_libraries(ego-recorder PRIVATE imgui_glfw_opengl3)
 endif()
 
 install(TARGETS ego-recorder DESTINATION bin)
