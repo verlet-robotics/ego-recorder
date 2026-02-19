@@ -131,8 +131,12 @@ add_executable(ego-recorder
     src/utils/stats.cpp
     src/config/config.cpp
     src/presenter/headless_presenter.cpp
-    # src/presenter/gui_presenter.cpp   -- added in plan 02-02 (WITH_GUI only)
 )
+
+# gui_presenter.cpp is only compiled when WITH_GUI=ON (added in plan 02-02)
+if(WITH_GUI)
+    target_sources(ego-recorder PRIVATE src/presenter/gui_presenter.cpp)
+endif()
 
 target_include_directories(ego-recorder PRIVATE src)
 
