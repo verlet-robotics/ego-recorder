@@ -1,0 +1,77 @@
+# ego-recorder headless deployment configuration
+#
+# This is the production configuration for the ego-recorder systemd service.
+# Installed to: /etc/ego-recorder/config.toml
+#
+# Copy and edit this file before starting the service:
+#   sudo cp /etc/ego-recorder/config.toml.example /etc/ego-recorder/config.toml
+#   sudo nano /etc/ego-recorder/config.toml
+#
+# All settings are optional -- missing keys use the built-in defaults.
+
+# ---------------------------------------------------------------------------
+# [output] -- Where recordings are saved
+# ---------------------------------------------------------------------------
+[output]
+
+# Directory where .egorec files are written.
+# The service user (ego-recorder) must have write permission here.
+# Subdirectories YYYY/MM/DD/ are created automatically each day.
+#
+# Default: "." (not suitable for service use -- always set this)
+# Example: "/var/lib/ego-recorder/recordings"
+#   sudo mkdir -p /var/lib/ego-recorder/recordings
+#   sudo chown ego-recorder:ego-recorder /var/lib/ego-recorder/recordings
+dir = "/var/lib/ego-recorder/recordings"
+
+# ---------------------------------------------------------------------------
+# [compression] -- Codec parameters
+# ---------------------------------------------------------------------------
+[compression]
+
+# JPEG quality for RGB frames.
+# Range: 1 (worst quality, smallest files) to 100 (best quality, largest files)
+# Default: 90  -- good balance for ML training data
+# Tip: 80-85 saves ~15% space with minimal visual quality loss at 640x480
+jpeg_quality = 90
+
+# ZSTD compression level for depth frames.
+# Range: 1 (fastest, ~3-4x compression) to 22 (slowest, best ratio)
+# Default: 1  -- fastest, <0.5ms/frame, adequate for real-time capture
+# Tip: level 3 adds ~1ms per frame but improves ratio to ~4-5x
+zstd_level = 1
+
+# ---------------------------------------------------------------------------
+# [recording] -- Capture pipeline settings
+# ---------------------------------------------------------------------------
+[recording]
+
+# Minimum free disk space in MB before recording stops automatically.
+# Default: 500   (interactive use)
+# Production:    1000 -- more conservative to avoid filesystem fragmentation
+#                and to leave headroom for other processes (logs, OS, etc.)
+# When triggered: the service exits (Restart=on-failure will not restart it
+# for a disk-full condition -- disk must be cleared manually).
+disk_min_mb = 1000
+
+# Bounded queue depth between capture thread and writer thread.
+# Range: 2 to 16
+# Default: 4  -- handles burst latency without consuming too much RAM
+# Each slot holds ~1.5 MB (640x480 RGB24 + Z16), so 4 slots = ~6 MB
+queue_size = 4
+
+# Number of frames to skip at startup for camera auto-exposure to settle.
+# Default: 30  (~1 second at 30fps)
+# Increase if early frames look under/over-exposed in recordings.
+warmup_frames = 30
+
+# ---------------------------------------------------------------------------
+# [service] -- Service mode settings
+# ---------------------------------------------------------------------------
+[service]
+
+# Run in headless mode (no GUI window).
+# MUST be true for systemd service operation.
+# The ExecStart in ego-recorder.service already passes --headless; this
+# config setting provides an additional confirmation.
+headless = true

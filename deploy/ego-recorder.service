@@ -1,0 +1,19 @@
+[Unit]
+Description=ego-recorder headless RGBD capture
+After=local-fs.target
+
+[Service]
+Type=notify
+User=ego-recorder
+Group=ego-recorder
+ExecStart=/usr/local/bin/ego-recorder --headless --config /etc/ego-recorder/config.toml
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=30s
+NotifyAccess=main
+RuntimeDirectory=ego-recorder
+RuntimeDirectoryMode=0750
+OOMScoreAdjust=-100
+
+[Install]
+WantedBy=multi-user.target

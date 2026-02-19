@@ -1,0 +1,21 @@
+# 99-ego-recorder.rules
+# Install to: /etc/udev/rules.d/99-ego-recorder.rules
+#
+# Vendor 8086 = Intel
+# D435 = 0x0b07, D435i = 0x0b3a
+#
+# Note: The complete vendor/product ID list for all RealSense D400 series variants
+# is maintained upstream at:
+#   https://github.com/IntelRealSense/librealsense/blob/master/config/99-realsense-libusb.rules
+# The install script copies the full upstream rules file and supplements it with
+# the ATTR{power/control}="on" lines below. Do not replicate the full list manually.
+
+# RealSense D435 (0x0b07) -- grant group access, disable USB autosuspend
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07", \
+    MODE:="0660", GROUP:="plugdev", \
+    ATTR{power/control}="on"
+
+# RealSense D435i (0x0b3a) -- grant group access, disable USB autosuspend
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b3a", \
+    MODE:="0660", GROUP:="plugdev", \
+    ATTR{power/control}="on"
