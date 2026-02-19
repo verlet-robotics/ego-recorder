@@ -1,9 +1,9 @@
 # Project State: RealSense Ego Recorder
 
 **Last updated:** 2026-02-19
-**Current phase:** 01-core-capture-engine-mvp-storage
-**Current plan:** 4 of 4 complete (PHASE COMPLETE)
-**Next action:** Begin phase 02 (`/gsd:execute-phase 02-gui-headless-service`)
+**Current phase:** 02-gui-mode-headless-systemd-service
+**Current plan:** 1 of 4 complete
+**Next action:** Execute plan 02-02 (GuiPresenter implementation)
 
 ---
 
@@ -12,7 +12,7 @@
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
-| 2 | NOT STARTED | GUI mode + headless systemd service |
+| 2 | IN PROGRESS (1/4 plans done) | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
 ---
@@ -44,6 +44,9 @@
 | FileHeader assembly location | main.cpp assembles FileHeader from pipeline getters; no pipeline-to-storage coupling | 2026-02-19 |
 | Compression thread placement | JPEG+ZSTD compression happens in writer thread; capture thread stays minimal (poll+copy+enqueue) | 2026-02-19 |
 | End-to-end verification | Verified on physical D435: 617 frames, 29.9fps, 0 dropped, EGOREC magic confirmed | 2026-02-19 |
+| IPresenter interface | Strategy pattern: start/tick/shutdown lifecycle + camera events + update_stats | 2026-02-19 |
+| Config loading | toml++ value_or() fallbacks; parse_error -> stderr warning + defaults | 2026-02-19 |
+| CMake GUI gating | WITH_GUI=ON: Dear ImGui v1.92.6 + GLFW + OpenGL; toml++ always linked | 2026-02-19 |
 
 ---
 
@@ -65,6 +68,7 @@
 | 2026-02-19 | 01-03 | ~2 min | 1/1 | 14795a3 |
 | 2026-02-19 | 01-02 | ~4 min | 2/2 | c6d20f8, 651a086 |
 | 2026-02-19 | 01-04 | ~15 min | 2/2 | a02dd98 |
+| 2026-02-19 | 02-01 | ~2 min | 2/2 | 92fa579, 2708cf4 |
 
 ---
 
