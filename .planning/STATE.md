@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-02-19
 **Current phase:** 01-core-capture-engine-mvp-storage
-**Current plan:** 03 of 4 complete
-**Next action:** Execute plan 04 (`/gsd:execute-phase 01-core-capture-engine-mvp-storage 04`)
+**Current plan:** 4 of 4 complete (PHASE COMPLETE)
+**Next action:** Begin phase 02 (`/gsd:execute-phase 02-gui-headless-service`)
 
 ---
 
@@ -11,7 +11,7 @@
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| 1 | IN PROGRESS (3/4 plans done) | Core capture engine + MVP storage |
+| 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
 | 2 | NOT STARTED | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
@@ -41,6 +41,9 @@
 | FileWriter write buffer | 256KB pubsetbuf() reduces syscall frequency on sequential frame appends | 2026-02-19 |
 | Stats atomic ordering | memory_order_relaxed for stats counters -- stale reads within display interval are acceptable | 2026-02-19 |
 | sigwait signal handling | Detached sigwait thread with pthread_sigmask -- avoids all async-signal-safety issues vs signal()/sigaction() | 2026-02-19 |
+| FileHeader assembly location | main.cpp assembles FileHeader from pipeline getters; no pipeline-to-storage coupling | 2026-02-19 |
+| Compression thread placement | JPEG+ZSTD compression happens in writer thread; capture thread stays minimal (poll+copy+enqueue) | 2026-02-19 |
+| End-to-end verification | Verified on physical D435: 617 frames, 29.9fps, 0 dropped, EGOREC magic confirmed | 2026-02-19 |
 
 ---
 
@@ -61,6 +64,7 @@
 | 2026-02-19 | 01-01 | ~5 min | 2/2 | d4b3ffe, 5586db1 |
 | 2026-02-19 | 01-03 | ~2 min | 1/1 | 14795a3 |
 | 2026-02-19 | 01-02 | ~4 min | 2/2 | c6d20f8, 651a086 |
+| 2026-02-19 | 01-04 | ~15 min | 2/2 | a02dd98 |
 
 ---
 
@@ -77,3 +81,4 @@ None.
 - Depth is stored but not yet used by current VLMs -- forward-looking differentiator.
 - `libturbojpeg0-dev` not system-installed on dev machine. Use `TURBOJPEG_LOCAL_PREFIX` cmake option or `sudo apt install libturbojpeg0-dev`. See 01-01-SUMMARY.md for workaround details.
 - realsense2 is installed via ROS Jazzy at `/opt/ros/jazzy`. Pass `-DCMAKE_PREFIX_PATH="/opt/ros/jazzy"` to cmake.
+- Phase 1 complete: ego-recorder binary records 640x480 RGB+depth at sustained 30fps to .egorec files. All 4 plans executed, physical camera verified.
