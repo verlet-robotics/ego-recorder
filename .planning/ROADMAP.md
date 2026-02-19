@@ -29,16 +29,16 @@
 **Plans:** 4 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- CMake project scaffold, frame types, bounded queue, compression wrappers
-- [ ] 01-02-PLAN.md -- Binary container format, file writer, signal handler, stats tracker
-- [ ] 01-03-PLAN.md -- RealSense pipeline wrapper with IMU detection and intrinsics
-- [ ] 01-04-PLAN.md -- Main orchestration, CLI, thread wiring, end-to-end verification
+- [x] 01-01-PLAN.md -- CMake project scaffold, frame types, bounded queue, compression wrappers
+- [x] 01-02-PLAN.md -- Binary container format, file writer, signal handler, stats tracker
+- [x] 01-03-PLAN.md -- RealSense pipeline wrapper with IMU detection and intrinsics
+- [x] 01-04-PLAN.md -- Main orchestration, CLI, thread wiring, end-to-end verification
 
 **Success criteria:**
-- [ ] Records 640x480 RGB+depth at sustained 30fps with 0 dropped frames
-- [ ] Memory usage stays constant (<200MB RSS) during 10-minute recording
-- [ ] Output file is seekable and recoverable after simulated crash
-- [ ] Clean shutdown on SIGTERM with complete file written
+- [x] Records 640x480 RGB+depth at sustained 30fps with 0 dropped frames
+- [x] Memory usage stays constant (<200MB RSS) during 10-minute recording
+- [x] Output file is seekable and recoverable after simulated crash
+- [x] Clean shutdown on SIGTERM with complete file written
 
 ---
 
@@ -53,7 +53,7 @@ Plans:
 - **GUI mode (GuiPresenter):**
   - Dear ImGui + GLFW + OpenGL window
   - Side-by-side RGB + colorized depth preview
-  - Start/stop/pause controls, session naming input
+  - Start/stop controls, session naming input
   - Stats overlay: FPS, frame count, dropped frames, disk usage, elapsed time
 - **Headless mode (HeadlessPresenter):**
   - systemd Type=notify service with WatchdogSec=30
@@ -67,7 +67,15 @@ Plans:
   - logind.conf drop-in for lid-close prevention
   - Install script for system user creation and file placement
 - USB disconnect/reconnect recovery (destroy + recreate pipeline)
-- Configuration file support (TOML or JSON)
+- Configuration file support (TOML via toml++)
+
+**Plans:** 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md -- IPresenter interface, TOML config system, CMake updates (ImGui, toml++)
+- [ ] 02-02-PLAN.md -- GuiPresenter with live preview, controls, stats overlay, keyboard shortcuts
+- [ ] 02-03-PLAN.md -- HeadlessPresenter with sd_notify, D-Bus inhibitor, deploy artifacts
+- [ ] 02-04-PLAN.md -- Main.cpp integration, USB recovery, --headless flag, end-to-end verification
 
 **Success criteria:**
 - [ ] GUI shows live RGB+depth at 30fps while simultaneously recording
