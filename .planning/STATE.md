@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-02-19
 **Current phase:** 02-gui-mode-headless-systemd-service
-**Current plan:** 2 of 4 complete
-**Next action:** Execute plan 02-03 (HeadlessPresenter implementation)
+**Current plan:** 3 of 4 complete
+**Next action:** Execute plan 02-04 (main.cpp integration: presenter selection, --headless flag, date-based dirs)
 
 ---
 
@@ -12,7 +12,7 @@
 | Phase | Status | Description |
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
-| 2 | IN PROGRESS (1/4 plans done) | GUI mode + headless systemd service |
+| 2 | IN PROGRESS (3/4 plans done) | GUI mode + headless systemd service |
 | 3 | NOT STARTED | Optimized compression + export tools |
 
 ---
@@ -51,6 +51,10 @@
 | Jet colormap orientation | blue=near (t=0), red=far (t=1) -- standard jet, invalid depth=black | 2026-02-19 |
 | ImGui flag correction | NoBringToDisplayFront does not exist in v1.92.6; correct is NoBringToFrontOnFocus | 2026-02-19 |
 | gui_presenter.cpp cmake | Compiled via target_sources inside if(WITH_GUI) block -- not unconditionally with HAVE_GUI guard | 2026-02-19 |
+| HeadlessPresenter shutdown callback | on_request_shutdown_ callback passed at construction -- disk-full signaling without coupling presenter to main.cpp | 2026-02-19 |
+| Status file write | Atomic rename (write to .tmp then rename) -- reader never sees partial JSON | 2026-02-19 |
+| FPS atomic storage | Stored as uint64_t (fps * 10) -- avoids atomic<double> which is not lock-free on x86 | 2026-02-19 |
+| deploy disk_min_mb | Production config.toml.example uses 1000 MB vs 500 MB interactive -- more conservative for unattended | 2026-02-19 |
 
 ---
 
@@ -74,6 +78,7 @@
 | 2026-02-19 | 01-04 | ~15 min | 2/2 | a02dd98 |
 | 2026-02-19 | 02-01 | ~2 min | 2/2 | 92fa579, 2708cf4 |
 | 2026-02-19 | 02-02 | ~8 min | 1/1 | 90a9dd8 |
+| 2026-02-19 | 02-03 | ~3 min | 2/2 | 2dfae82, 30f4b67 |
 
 ---
 
