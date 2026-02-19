@@ -1,1 +1,164 @@
-// Stub -- implemented in plan 02
+#include "capture/pipeline.h"
+
+#include <cstdio>
+#include <stdexcept>
+
+void RealSensePipeline::configure_and_start(int warmup_frames)
+{
+    // -------------------------------------------------------------------------
+    // 1. Configure RGB and depth streams
+    // -------------------------------------------------------------------------
+    rs2::config cfg;
+    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
+    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16,  30);
+
+    // -------------------------------------------------------------------------
+    // 2. Attempt IMU streams (D435i detection)
+    //
+    // Try to start with accel + gyro. If it throws (D435 without IMU),
+    // fall back to RGB+depth only.
+    // -------------------------------------------------------------------------
+    cfg.enable_stream(RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
+    cfg.enable_stream(RS2_STREAM_GYRO,  RS2_FORMAT_MOTION_XYZ32F);
+
+    try {
+        profile_ = pipe_.start(cfg);
+        has_imu_ = true;
+        fprintf(stderr, "IMU detected (D435i mode)\n");
+    } catch (const rs2::error&) {
+        // IMU not available -- retry with RGB+depth only
+        rs2::config cfg_no_imu;
+        cfg_no_imu.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
+        cfg_no_imu.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16,  30);
+        profile_ = pipe_.start(cfg_no_imu);
+        has_imu_ = false;
+        fprintf(stderr, "No IMU detected (D435 mode)\n");
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Extract device info
+    // -------------------------------------------------------------------------
+    auto dev = profile_.get_device();
+    serial_number_ = dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+    usb_type_      = dev.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+
+    if (!usb_type_.empty() && usb_type_[0] == '2') {
+        fprintf(stderr,
+            "WARNING: USB 2.0 detected. Bandwidth may be insufficient for "
+            "640x480@30fps RGB+depth. Use a USB 3.0 port and cable.\n");
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Disable auto-exposure priority
+    //    Setting to 0 prevents the sensor from reducing frame rate to maintain
+    //    exposure target, ensuring a constant 30fps.
+    // -------------------------------------------------------------------------
+    auto color_sensor = profile_.get_device().first<rs2::color_sensor>();
+    color_sensor.set_option(RS2_OPTION_AUTO_EXPOSURE_PRIORITY, 0.0f);
+
+    // -------------------------------------------------------------------------
+    // 5. Enable global time synchronization
+    //    Aligns hardware timestamps across sensors to a common clock.
+    // -------------------------------------------------------------------------
+    auto depth_sensor = profile_.get_device().first<rs2::depth_sensor>();
+    if (depth_sensor.supports(RS2_OPTION_GLOBAL_TIME_ENABLED)) {
+        depth_sensor.set_option(RS2_OPTION_GLOBAL_TIME_ENABLED, 1.0f);
+    }
+
+    // -------------------------------------------------------------------------
+    // 6. Extract depth scale
+    //    Multiply raw Z16 value by depth_scale_ to get depth in meters.
+    // -------------------------------------------------------------------------
+    depth_scale_ = depth_sensor.get_depth_scale();
+
+    // -------------------------------------------------------------------------
+    // 7. Extract intrinsics and extrinsics
+    // -------------------------------------------------------------------------
+    auto depth_stream = profile_.get_stream(RS2_STREAM_DEPTH).as<rs2::video_stream_profile>();
+    auto color_stream = profile_.get_stream(RS2_STREAM_COLOR).as<rs2::video_stream_profile>();
+
+    depth_intrinsics_          = depth_stream.get_intrinsics();
+    color_intrinsics_          = color_stream.get_intrinsics();
+    depth_to_color_extrinsics_ = depth_stream.get_extrinsics_to(color_stream);
+
+    // -------------------------------------------------------------------------
+    // 8. Warmup -- drop first N frames for auto-exposure stabilization
+    // -------------------------------------------------------------------------
+    fprintf(stderr, "Warming up camera (%d frames)...\n", warmup_frames);
+    for (int i = 0; i < warmup_frames; ++i) {
+        pipe_.wait_for_frames();
+    }
+    fprintf(stderr, "Camera ready.\n");
+
+    // -------------------------------------------------------------------------
+    // 9. Initialize frame counter
+    // -------------------------------------------------------------------------
+    frame_counter_ = 0;
+}
+
+void RealSensePipeline::stop()
+{
+    pipe_.stop();
+}
+
+CapturedFrame RealSensePipeline::poll_frame()
+{
+    // Block until the next synchronized frameset arrives from the pipeline.
+    rs2::frameset frames = pipe_.wait_for_frames();
+
+    // Extract color and depth frames from the synchronized set.
+    rs2::video_frame color = frames.get_color_frame();
+    rs2::depth_frame depth = frames.get_depth_frame();
+
+    CapturedFrame cf;
+
+    // Timestamp: SDK returns milliseconds as double; convert to microseconds.
+    cf.timestamp_us = static_cast<uint64_t>(color.get_timestamp() * 1000.0);
+    cf.frame_number = frame_counter_++;
+
+    // Copy RGB data into the CapturedFrame vector.
+    // IMPORTANT: color.get_data() is only valid while `frames` is alive.
+    // The vector::assign performs a memcpy, so data is owned by cf after this.
+    {
+        const auto* ptr = static_cast<const uint8_t*>(color.get_data());
+        const int stride = color.get_stride_in_bytes();
+        const int height = color.get_height();
+        cf.rgb_data.assign(ptr, ptr + stride * height);
+    }
+
+    // Copy depth data into the CapturedFrame vector.
+    {
+        const auto* ptr = static_cast<const uint8_t*>(depth.get_data());
+        const int stride = depth.get_stride_in_bytes();
+        const int height = depth.get_height();
+        cf.depth_data.assign(ptr, ptr + stride * height);
+    }
+
+    // Collect IMU samples if IMU is enabled (D435i mode).
+    // IMU frames arrive at higher rate (200-400 Hz) than video (30 fps),
+    // so there may be 0 or more motion frames bundled in the frameset.
+    if (has_imu_) {
+        frames.foreach_rs([&](const rs2::frame& f) {
+            if (f.get_profile().stream_type() == RS2_STREAM_ACCEL ||
+                f.get_profile().stream_type() == RS2_STREAM_GYRO)
+            {
+                rs2::motion_frame mf = f.as<rs2::motion_frame>();
+                rs2_vector motion_data = mf.get_motion_data();
+                IMUSample sample{};
+                sample.timestamp_us = static_cast<uint64_t>(mf.get_timestamp() * 1000.0);
+                if (f.get_profile().stream_type() == RS2_STREAM_ACCEL) {
+                    sample.accel[0] = motion_data.x;
+                    sample.accel[1] = motion_data.y;
+                    sample.accel[2] = motion_data.z;
+                } else {
+                    sample.gyro[0] = motion_data.x;
+                    sample.gyro[1] = motion_data.y;
+                    sample.gyro[2] = motion_data.z;
+                }
+                cf.imu_samples.push_back(std::move(sample));
+            }
+        });
+    }
+
+    return cf;
+}
