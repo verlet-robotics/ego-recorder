@@ -549,8 +549,8 @@ int main(int argc, char* argv[]) {
 
                     auto& frame = *maybe_frame;
 
-                    // H.264 encode RGB
-                    auto h264_data = h264.encode(frame.rgb_data.data(), 640, 480);
+                    // H.264 encode RGB (returns pointer to internal buffer)
+                    auto [h264_data, h264_size] = h264.encode(frame.rgb_data.data(), 640, 480);
 
                     // Zdepth compress depth -- keyframe every 30 frames (GOP=30)
                     bool keyframe = (frame.frame_number % 30 == 0);
@@ -573,14 +573,14 @@ int main(int argc, char* argv[]) {
                     }
 
                     writer->write_frame(
-                        h264_data.data(), h264_data.size(),
+                        h264_data, h264_size,
                         zdepth_data, zdepth_size,
                         frame.timestamp_us,
                         frame.frame_number,
                         imu_wire);
 
                     stats.frame_written();
-                    stats.bytes_written(h264_data.size() + zdepth_size);
+                    stats.bytes_written(h264_size + zdepth_size);
                 }
             });
         };
@@ -602,12 +602,12 @@ int main(int argc, char* argv[]) {
             // Flush H.264 encoder AFTER writer thread exits (no more encode() calls)
             // but BEFORE finalize() (file still open for writing)
             if (writer && !writer->is_finalized()) {
-                auto flush_data = h264.flush();
-                if (!flush_data.empty()) {
+                auto [flush_data, flush_size] = h264.flush();
+                if (flush_size > 0) {
                     // Write trailing H.264 NAL units without creating an IndexEntry.
                     // The reader recovers these by reading bytes between the last
                     // indexed frame block's end and footer.index_offset.
-                    writer->write_trailing_codec_data(flush_data.data(), flush_data.size());
+                    writer->write_trailing_codec_data(flush_data, flush_size);
                 }
                 writer->finalize();
             }

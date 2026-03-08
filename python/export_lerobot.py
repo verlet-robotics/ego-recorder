@@ -66,16 +66,6 @@ def export_single_dataset(egorec_paths, output_dir, repo_id, quiet=False):
             "shape": (480, 640),
             "names": ["height", "width"],
         },
-        "timestamp": {
-            "dtype": "float64",
-            "shape": (1,),
-            "names": None,
-        },
-        "task_index": {
-            "dtype": "int64",
-            "shape": (1,),
-            "names": None,
-        },
     }
 
     # Handle API differences between lerobot versions
@@ -111,8 +101,7 @@ def export_single_dataset(egorec_paths, output_dir, repo_id, quiet=False):
             dataset.add_frame({
                 "observation.images.rgb": frame["rgb"],
                 "observation.depth_mm": frame["depth"].astype(np.float32),
-                "timestamp": np.array([frame["timestamp_relative_s"]]),
-                "task_index": np.array([0], dtype=np.int64),
+                "task": "ego_recording",
             })
 
             # Track bytes for MB/s throughput display

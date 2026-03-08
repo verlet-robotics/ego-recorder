@@ -19,6 +19,7 @@ struct H264Encoder::Impl {
     AVPacket* pkt{nullptr};
     SwsContext* sws{nullptr};
     int64_t frame_counter{0};
+    std::vector<uint8_t> out_buf;  ///< Reusable output buffer (avoids alloc per frame)
 
     /// Initialize all FFmpeg resources for encoding.
     void init(int width, int height, int fps, int crf) {
@@ -45,8 +46,14 @@ struct H264Encoder::Impl {
         ctx->gop_size = fps;       // One keyframe per second
         ctx->max_b_frames = 0;     // No B-frames for real-time encoding
 
-        // Set CRF and preset via private options
+        // Set CRF, preset, and tune via private options.
+        // "zerolatency" disables the lookahead buffer so that each encode()
+        // call produces exactly one output packet.  Without this, x264
+        // buffers ~46 frames before emitting output, causing the first N
+        // frame blocks to have 0-byte RGB data and misaligning RGB with
+        // depth in the written file.
         av_opt_set(ctx->priv_data, "preset", "fast", 0);
+        av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
         av_opt_set(ctx->priv_data, "crf", std::to_string(crf).c_str(), 0);
 
         // Open the codec
@@ -118,9 +125,9 @@ struct H264Encoder::Impl {
         frame_counter = 0;
     }
 
-    /// Receive all available packets from the encoder, appending NAL data.
-    std::vector<uint8_t> receive_packets() {
-        std::vector<uint8_t> out;
+    /// Receive all available packets from the encoder into out_buf.
+    void receive_packets() {
+        out_buf.clear();
         while (true) {
             int ret = avcodec_receive_packet(ctx, pkt);
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
@@ -131,10 +138,9 @@ struct H264Encoder::Impl {
                     "H264Encoder: avcodec_receive_packet failed (error " +
                     std::to_string(ret) + ")");
             }
-            out.insert(out.end(), pkt->data, pkt->data + pkt->size);
+            out_buf.insert(out_buf.end(), pkt->data, pkt->data + pkt->size);
             av_packet_unref(pkt);
         }
-        return out;
     }
 };
 
@@ -160,7 +166,7 @@ H264Encoder::~H264Encoder() {
     impl_->cleanup();
 }
 
-std::vector<uint8_t> H264Encoder::encode(
+std::pair<const uint8_t*, size_t> H264Encoder::encode(
     const uint8_t* rgb24, int width, int height)
 {
     assert(width == width_ && "Width mismatch");
@@ -193,11 +199,12 @@ std::vector<uint8_t> H264Encoder::encode(
             std::to_string(ret) + ")");
     }
 
-    // Receive all available encoded packets
-    return impl_->receive_packets();
+    // Receive all available encoded packets into reusable buffer
+    impl_->receive_packets();
+    return {impl_->out_buf.data(), impl_->out_buf.size()};
 }
 
-std::vector<uint8_t> H264Encoder::flush() {
+std::pair<const uint8_t*, size_t> H264Encoder::flush() {
     // Send null frame to signal end of stream
     int ret = avcodec_send_frame(impl_->ctx, nullptr);
     if (ret < 0 && ret != AVERROR_EOF) {
@@ -206,8 +213,9 @@ std::vector<uint8_t> H264Encoder::flush() {
             std::to_string(ret) + ")");
     }
 
-    // Receive all remaining buffered packets
-    return impl_->receive_packets();
+    // Receive all remaining buffered packets into reusable buffer
+    impl_->receive_packets();
+    return {impl_->out_buf.data(), impl_->out_buf.size()};
 }
 
 void H264Encoder::reset() {

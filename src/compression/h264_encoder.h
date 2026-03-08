@@ -24,16 +24,17 @@ public:
     H264Encoder(H264Encoder&&) = delete;
     H264Encoder& operator=(H264Encoder&&) = delete;
 
-    /// Encode one RGB24 frame. Returns compressed H.264 NAL units.
-    /// May return empty vector for buffered frames.
+    /// Encode one RGB24 frame. Returns {pointer, size} to internal buffer.
+    /// Pointer is valid until the next encode() or flush() call.
+    /// May return size=0 for buffered frames (encoder hasn't produced output yet).
     /// @param rgb24   Pointer to RGB24 pixel data (width * height * 3 bytes)
     /// @param width   Frame width (must match constructor)
     /// @param height  Frame height (must match constructor)
-    std::vector<uint8_t> encode(const uint8_t* rgb24, int width, int height);
+    std::pair<const uint8_t*, size_t> encode(const uint8_t* rgb24, int width, int height);
 
     /// Flush remaining buffered frames at end of recording.
-    /// @returns Concatenated NAL units for all remaining frames
-    std::vector<uint8_t> flush();
+    /// Returns {pointer, size} to internal buffer (valid until next encode/flush/reset).
+    std::pair<const uint8_t*, size_t> flush();
 
     /// Reset encoder state for a new recording session.
     /// Must be called when starting a new file (after reconnect etc).

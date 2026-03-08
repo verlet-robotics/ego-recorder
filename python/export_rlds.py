@@ -43,6 +43,10 @@ class EgoRecDataset(tfds.core.GeneratorBasedBuilder):
     VERSION = tfds.core.Version('1.0.0')
     RELEASE_NOTES = {'1.0.0': 'Initial release from ego-recorder v2.'}
 
+    @classmethod
+    def _get_pkg_dir_path(cls):
+        return Path(__file__).parent
+
     def __init__(self, egorec_paths, dataset_name=None, **kwargs):
         self._egorec_paths = [Path(p) for p in egorec_paths]
 
@@ -87,7 +91,7 @@ class EgoRecDataset(tfds.core.GeneratorBasedBuilder):
             }),
         )
 
-    def _split_generators(self):
+    def _split_generators(self, dl_manager=None):
         return {
             'train': self._generate_examples(self._egorec_paths),
         }

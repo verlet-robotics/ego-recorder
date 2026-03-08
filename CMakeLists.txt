@@ -231,3 +231,59 @@ if(WITH_GUI)
 endif()
 
 install(TARGETS ego-recorder DESTINATION bin)
+
+# ---- Tests ----
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG        v1.15.2
+    )
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+
+    # Shared sources used by multiple test targets
+    set(TEST_COMMON_SOURCES
+        src/compression/jpeg_compressor.cpp
+        src/compression/zstd_compressor.cpp
+        src/compression/zdepth_compressor.cpp
+        src/compression/h264_encoder.cpp
+        src/storage/file_writer.cpp
+        src/config/config.cpp
+        src/utils/stats.cpp
+    )
+
+    add_executable(ego-recorder-tests
+        tests/test_binary_format.cpp
+        tests/test_file_writer.cpp
+        tests/test_compression.cpp
+        tests/test_bounded_queue.cpp
+        tests/test_stats.cpp
+        tests/test_config.cpp
+        tests/test_integration.cpp
+        ${TEST_COMMON_SOURCES}
+    )
+
+    target_include_directories(ego-recorder-tests PRIVATE src)
+    target_link_libraries(ego-recorder-tests PRIVATE
+        gtest_main
+        PkgConfig::TURBOJPEG
+        PkgConfig::ZSTD
+        zdepth
+        PkgConfig::AVCODEC
+        PkgConfig::AVUTIL
+        PkgConfig::SWSCALE
+        tomlplusplus::tomlplusplus
+        pthread
+    )
+
+    include(GoogleTest)
+    gtest_discover_tests(ego-recorder-tests)
+
+    message(STATUS "Tests: enabled")
+else()
+    message(STATUS "Tests: disabled (-DBUILD_TESTS=OFF)")
+endif()

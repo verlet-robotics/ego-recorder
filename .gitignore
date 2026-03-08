@@ -1,5 +1,9 @@
 build/
+build_*/
 *.deb
 *.o
 *.a
 compile_commands.json
+*.egorec
+imgui.ini
+__pycache__/
