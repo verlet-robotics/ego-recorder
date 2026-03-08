@@ -560,8 +560,14 @@ int main(int argc, char* argv[]) {
     std::atomic<bool>              recording_active{false};
     std::atomic<bool>              camera_disconnected{false};
     std::atomic<int64_t>           last_capture_ms{0};  // steady_clock ms, 0 = no frame yet
+    std::atomic<int>               capture_generation{0};
     std::string                    current_session_name = session_name;
     std::string                    last_recording_path_;
+
+    // Zombie storage: old capture threads/cameras that are stuck inside
+    // librealsense's 15-second internal timeout. Kept alive until shutdown.
+    std::vector<std::thread>                         zombie_threads;
+    std::vector<std::unique_ptr<RealSensePipeline>>  zombie_cameras;
 
     // ---- Outer try/catch ---------------------------------------------------
     try {
@@ -853,58 +859,25 @@ int main(int argc, char* argv[]) {
 
         // ---- Disconnect handler (shared by both error catch paths) ----------
         // Returns true if the capture loop should continue, false to break.
+        //
+        // Headless: saves episode, sets camera_disconnected, returns false.
+        //   The capture thread exits; the main thread handles reconnection
+        //   and spawns a new capture thread. This avoids blocking on
+        //   librealsense's 15-second internal timeout.
+        //
+        // GUI: sets camera_disconnected, returns true (capture thread sleeps
+        //   until the user clicks Reconnect on the main thread).
         auto handle_disconnect = [&]() -> bool {
             if (config.headless) {
-                // Headless: save episode, wait for reconnect, start new episode.
-                // If the watchdog already set camera_disconnected and saved the
-                // episode, skip the duplicate notification and go straight to
-                // the reconnect loop.
                 if (!camera_disconnected.exchange(true, std::memory_order_acq_rel)) {
                     presenter->on_camera_disconnect();
                 }
-
                 if (recording_active.load(std::memory_order_acquire)) {
                     stop_recording();
                     std::thread([]{ play_speech("Episode saved"); }).detach();
-                    fprintf(stderr, "[headless] Episode saved. Waiting for camera...\n");
+                    fprintf(stderr, "[headless] Episode saved.\n");
                 }
-                fprintf(stderr, "[headless] Reconnecting...\n");
-
-                // Auto-retry loop: destroy + sleep + recreate pipeline
-                bool reconnected = false;
-                while (!shutdown_flag.load() && !reconnected) {
-                    camera.reset();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-                    try {
-                        camera = std::make_unique<RealSensePipeline>();
-                        camera->configure_and_start(config.warmup_frames);
-                        reconnected = true;
-                    } catch (const rs2::error&) {
-                        camera.reset();
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-                    }
-                }
-
-                if (reconnected && !shutdown_flag.load()) {
-                    camera_disconnected.store(false, std::memory_order_release);
-
-                    play_speech("Camera ready");
-                    play_countdown(shutdown_flag);
-                    if (shutdown_flag.load()) return false;
-
-                    presenter->on_camera_reconnect();
-                    session_name = make_session_name();
-                    output_dir = make_date_dir(config.output_dir);
-                    {
-                        std::error_code ec;
-                        std::filesystem::create_directories(output_dir, ec);
-                        if (ec) { output_dir = config.output_dir; }
-                    }
-                    start_recording(session_name, output_dir,
-                                    /*add_timestamp_suffix=*/false);
-                }
-                return true;  // keep looping
+                return false;  // exit capture loop; main thread reconnects
             } else {
                 // GUI mode: show disconnect banner, user triggers reconnect
                 camera_disconnected.store(true, std::memory_order_release);
@@ -913,87 +886,101 @@ int main(int argc, char* argv[]) {
             }
         };
 
-        // ---- Capture thread ------------------------------------------------
-        // Always runs to feed live preview frames (GUI mode) or record frames
-        // (headless mode). In GUI mode, frames are pushed to GuiPresenter for
-        // preview even before recording starts.
-        std::thread capture_thread([&]() {
-            while (!shutdown_flag.load(std::memory_order_acquire)) {
-                // If camera is disconnected, handle per-mode:
-                //   Headless: drive reconnect from capture thread (handle_disconnect)
-                //   GUI:      sleep until main thread reconnects via user button
-                if (camera_disconnected.load(std::memory_order_acquire)) {
-                    if (config.headless) {
-                        if (!handle_disconnect()) break;
-                    } else {
+        // ---- Capture thread factory -----------------------------------------
+        // Creates a capture thread bound to a generation number. When the
+        // generation is superseded (main thread spawned a replacement), the
+        // old thread exits at its next opportunity -- even if it was stuck
+        // inside librealsense's 15-second internal reconnect timeout.
+        auto spawn_capture_thread = [&](int gen) -> std::thread {
+            return std::thread([&, gen]() {
+                while (!shutdown_flag.load(std::memory_order_acquire)) {
+                    // Exit if this thread has been superseded
+                    if (capture_generation.load(std::memory_order_acquire) != gen) break;
+
+                    // If camera is disconnected:
+                    //   Headless: exit loop, main thread handles reconnect
+                    //   GUI:      sleep until main thread reconnects via button
+                    if (camera_disconnected.load(std::memory_order_acquire)) {
+                        if (config.headless) {
+                            break;
+                        } else {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                            continue;
+                        }
+                    }
+
+                    // Camera may be null during reconnect sequence
+                    if (!camera) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        continue;
                     }
-                    continue;
-                }
 
-                // Camera may be null during reconnect sequence
-                if (!camera) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    continue;
-                }
+                    // Proactive disconnect detection via rs2 hotplug callback
+                    if (camera->is_device_lost()) {
+                        fprintf(stderr, "\n[capture] Camera unplugged (hotplug event)\n");
+                        if (!handle_disconnect()) break;
+                        continue;
+                    }
 
-                // Proactive disconnect detection via rs2 hotplug callback.
-                // Fires within milliseconds of USB unplug -- no need to wait
-                // for poll_frame() to throw after a 15-second timeout.
-                if (camera->is_device_lost()) {
-                    fprintf(stderr, "\n[capture] Camera unplugged (hotplug event)\n");
-                    if (!handle_disconnect()) break;
-                    continue;
-                }
+                    try {
+                        auto maybe_frame = camera->poll_frame();
 
-                try {
-                    auto maybe_frame = camera->poll_frame();
+                        // After unblocking from poll_frame, check if this
+                        // thread has been superseded or the camera disconnected.
+                        // This is the earliest safe exit before accessing camera
+                        // again (main thread may have moved it to zombie storage).
+                        if (capture_generation.load(std::memory_order_acquire) != gen) break;
+                        if (camera_disconnected.load(std::memory_order_acquire)) break;
 
-                    // poll_frame returns nullopt on timeout (500ms). This is
-                    // normal -- loop back to check is_device_lost() and flags.
-                    if (!maybe_frame) continue;
+                        if (!maybe_frame) continue;
 
-                    CapturedFrame& frame = *maybe_frame;
-                    stats.frame_captured();
-                    last_capture_ms.store(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::steady_clock::now().time_since_epoch()).count(),
-                        std::memory_order_release);
+                        CapturedFrame& frame = *maybe_frame;
+                        stats.frame_captured();
+                        last_capture_ms.store(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch()).count(),
+                            std::memory_order_release);
 
-                    // Feed frame to GUI presenter for live preview
+                        // Feed frame to GUI presenter for live preview
 #ifdef HAVE_GUI
-                    if (!config.headless) {
-                        auto* gui = static_cast<GuiPresenter*>(presenter.get());
-                        gui->update_frame(
-                            frame.rgb_data.data(),
-                            reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
-                            640, 480,
-                            camera->depth_scale()
-                        );
-                    }
+                        if (!config.headless) {
+                            auto* gui = static_cast<GuiPresenter*>(presenter.get());
+                            gui->update_frame(
+                                frame.rgb_data.data(),
+                                reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
+                                640, 480,
+                                camera->depth_scale()
+                            );
+                        }
 #endif
 
-                    // Push to writer queue if recording
-                    if (recording_active.load(std::memory_order_acquire) && queue) {
-                        queue->push(std::move(frame));
-                    }
+                        // Push to writer queue if recording
+                        if (recording_active.load(std::memory_order_acquire) && queue) {
+                            queue->push(std::move(frame));
+                        }
 
-                    // Duration limit check
-                    if (max_duration > 0 &&
-                        stats.elapsed_seconds() >= static_cast<double>(max_duration)) {
-                        shutdown_flag.store(true, std::memory_order_release);
+                        // Duration limit check
+                        if (max_duration > 0 &&
+                            stats.elapsed_seconds() >= static_cast<double>(max_duration)) {
+                            shutdown_flag.store(true, std::memory_order_release);
+                        }
+                    } catch (const rs2::error& e) {
+                        if (capture_generation.load(std::memory_order_acquire) != gen) break;
+                        fprintf(stderr, "\n[capture] RealSense error: %s\n", e.what());
+                        if (!handle_disconnect()) break;
                     }
-                } catch (const rs2::error& e) {
-                    fprintf(stderr, "\n[capture] RealSense error: %s\n", e.what());
-                    if (!handle_disconnect()) break;
                 }
-            }
 
-            // Signal writer to drain and exit
-            if (queue) {
-                queue->close();
-            }
-        });
+                // Signal writer to drain -- but only if we're still the
+                // active generation (a superseded zombie must not close
+                // the new recording's queue).
+                if (capture_generation.load(std::memory_order_acquire) == gen && queue) {
+                    queue->close();
+                }
+            });
+        };
+
+        std::thread capture_thread = spawn_capture_thread(0);
 
         // ---- Main loop: presenter tick + stats reporting -------------------
         while (!shutdown_flag.load(std::memory_order_acquire)) {
@@ -1029,22 +1016,75 @@ int main(int argc, char* argv[]) {
                         fprintf(stderr, "\n[headless] No frames for 1s -- saving episode\n");
                         stop_recording();
                         std::thread([]{ play_speech("Episode saved"); }).detach();
-
-                        // Signal the capture thread that we've already saved.
-                        // When it eventually unblocks from librealsense's
-                        // internal 15-second timeout, it will see this flag
-                        // and go straight to the reconnect loop.
                         camera_disconnected.store(true, std::memory_order_release);
                         presenter->on_camera_disconnect();
+                    }
+                }
+
+                // Main-thread reconnect: when camera_disconnected is set
+                // (by watchdog above or by capture thread's handle_disconnect),
+                // retire the old capture thread and poll for a new camera.
+                // The old thread may still be stuck inside librealsense --
+                // it's moved to zombie storage and will exit when it unblocks.
+                if (camera_disconnected.load(std::memory_order_acquire)
+                    && !shutdown_flag.load()) {
+                    // Retire old capture thread once (joinable == false after move).
+                    // Stop the old pipeline first to release the USB device --
+                    // otherwise librealsense's internal reconnect holds the
+                    // device for 15 seconds, blocking the new pipeline.
+                    if (capture_thread.joinable()) {
+                        if (camera) camera->stop();
+                        zombie_cameras.push_back(std::move(camera));
+                        zombie_threads.push_back(std::move(capture_thread));
+                        fprintf(stderr, "[headless] Waiting for camera...\n");
+                    }
+
+                    // Try to create a new camera
+                    try {
+                        camera = std::make_unique<RealSensePipeline>();
+                        camera->configure_and_start(config.warmup_frames);
+
+                        // Spawn new capture thread (old zombie exits on gen check)
+                        int new_gen = capture_generation.fetch_add(1,
+                            std::memory_order_acq_rel) + 1;
+                        capture_thread = spawn_capture_thread(new_gen);
+                        camera_disconnected.store(false, std::memory_order_release);
+
+                        play_speech("Camera ready");
+                        play_countdown(shutdown_flag);
+                        if (shutdown_flag.load()) continue;
+
+                        presenter->on_camera_reconnect();
+                        session_name = make_session_name();
+                        output_dir = make_date_dir(config.output_dir);
+                        {
+                            std::error_code ec;
+                            std::filesystem::create_directories(output_dir, ec);
+                            if (ec) { output_dir = config.output_dir; }
+                        }
+                        start_recording(session_name, output_dir,
+                                        /*add_timestamp_suffix=*/false);
+                    } catch (const rs2::error&) {
+                        // Camera not available yet, retry next tick (~100ms)
+                        camera.reset();
                     }
                 }
             }
         }
 
         // ---- Shutdown sequence ---------------------------------------------
-        capture_thread.join();
+        if (capture_thread.joinable()) {
+            capture_thread.join();
+        }
 
         stop_recording();
+
+        // Join zombie capture threads from previous disconnect cycles
+        for (auto& t : zombie_threads) {
+            if (t.joinable()) t.join();
+        }
+        zombie_threads.clear();
+        zombie_cameras.clear();
 
         // Final stats
         fprintf(stderr, "\n\nRecording complete.\n%s\n", stats.summary().c_str());

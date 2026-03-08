@@ -35,6 +35,12 @@ void Stats::bytes_written(size_t bytes) {
 }
 
 void Stats::recording_started() {
+    // Reset per-episode counters so each recording shows its own stats
+    frames_captured_.store(0, std::memory_order_relaxed);
+    frames_written_.store(0, std::memory_order_relaxed);
+    frames_dropped_.store(0, std::memory_order_relaxed);
+    bytes_written_.store(0, std::memory_order_relaxed);
+    rec_accumulated_us_.store(0, std::memory_order_relaxed);
     rec_start_us_.store(now_us(), std::memory_order_relaxed);
     recording_.store(true, std::memory_order_release);
 }
