@@ -76,6 +76,9 @@ public:
         float           depth_scale
     );
 
+    /// Set the dataset name to display above session name input.
+    void set_dataset_name(const std::string& name) { dataset_name_ = name; }
+
     /// Returns true while recording is active.
     bool        is_recording()  const { return recording_; }
 
@@ -122,6 +125,7 @@ private:
     bool                    frame_ready_ = false;
 
     // ---- GUI state ----
+    std::string dataset_name_;
     std::string session_name_;
     bool        recording_    = false;
     bool        disconnected_ = false;

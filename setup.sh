@@ -220,6 +220,9 @@ install_system_deps() {
         libavcodec-dev
         libavutil-dev
         libswscale-dev
+
+        # Audio alerts (headless TTS for disconnect/reconnect)
+        espeak-ng
     )
 
     # GUI dependencies

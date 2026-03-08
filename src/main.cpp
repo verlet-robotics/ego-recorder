@@ -8,8 +8,9 @@
 //     overlay. Recording starts only when the user clicks "Start Recording".
 //
 //   Headless mode (--headless):
-//     Designed for unattended systemd service operation. Starts recording
-//     immediately with an auto-generated timestamp session name. Integrates with
+//     Designed for unattended systemd service operation. Waits for a RealSense
+//     camera to appear (hotplug), plays a 3-second audio countdown, then starts
+//     recording with an auto-generated timestamp session name. Integrates with
 //     systemd sd_notify (READY, WATCHDOG, STATUS, STOPPING) and the D-Bus
 //     inhibitor lock to block lid-close during recording.
 //
@@ -26,6 +27,7 @@
 //     "Reconnect" button. When clicked, on_reconnect_requested callback fires:
 //     pipeline is destroyed, 500ms sleep, recreated, recording resumes.
 //   - Headless mode: Auto-retry every 2 seconds until camera is available again.
+//     Plays 3-second audio countdown before resuming recording.
 //     New recording file opened after each successful reconnect.
 //
 // Config + CLI merge:
@@ -56,6 +58,9 @@
 #endif
 
 #include "presenter/headless_presenter.h"
+#include "utils/audio_alert.h"
+#include "dataset/dataset_manifest.h"
+#include "dataset/dataset_commands.h"
 
 #include <atomic>
 #include <cerrno>
@@ -279,6 +284,28 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
+        // ---- dataset subcommand ----
+        if (cmd == "dataset") {
+            if (argc < 3) {
+                fprintf(stderr, "Usage: ego-recorder dataset <init|info|add|remove> [args...]\n");
+                return 1;
+            }
+            std::string_view subcmd = argv[2];
+            // Pass remaining args after "dataset <subcmd>"
+            int sub_argc = argc - 3;
+            char** sub_argv = argv + 3;
+
+            if (subcmd == "init")   return cmd_dataset_init(sub_argc, sub_argv);
+            if (subcmd == "info")   return cmd_dataset_info(sub_argc, sub_argv);
+            if (subcmd == "add")    return cmd_dataset_add(sub_argc, sub_argv);
+            if (subcmd == "remove") return cmd_dataset_remove(sub_argc, sub_argv);
+
+            fprintf(stderr, "Error: unknown dataset subcommand '%.*s'\n",
+                    static_cast<int>(subcmd.size()), subcmd.data());
+            fprintf(stderr, "Available: init, info, add, remove\n");
+            return 1;
+        }
+
         // ---- export subcommand (dispatches to Python scripts) ----
         // Per locked decision: `ego-recorder export rlds` and `ego-recorder export lerobot`
         if (cmd == "export") {
@@ -334,9 +361,45 @@ int main(int argc, char* argv[]) {
 
             // Build argv for Python: python3 script_path [remaining args...]
             // Skip argv[0] (ego-recorder) and argv[1] (export) and argv[2] (format)
+            //
+            // If a positional arg is a directory with dataset.json, expand it
+            // to the resolved .egorec file paths and add dataset metadata flags.
             std::vector<std::string> py_args = {"python3", script_path};
             for (int i = 3; i < argc; ++i) {
-                py_args.push_back(argv[i]);
+                std::string arg = argv[i];
+                // Check if this arg is a dataset directory (not a flag)
+                if (!arg.empty() && arg[0] != '-' &&
+                    std::filesystem::is_directory(arg) && has_manifest(arg)) {
+                    DatasetManifest ds_manifest;
+                    if (load_manifest(arg, ds_manifest)) {
+                        // Add dataset metadata flags
+                        if (!ds_manifest.name.empty()) {
+                            py_args.push_back("--dataset-name");
+                            py_args.push_back(ds_manifest.name);
+                        }
+                        if (!ds_manifest.description.empty()) {
+                            py_args.push_back("--dataset-description");
+                            py_args.push_back(ds_manifest.description);
+                        }
+                        if (!ds_manifest.tags.empty()) {
+                            std::string tags_joined;
+                            for (size_t t = 0; t < ds_manifest.tags.size(); ++t) {
+                                if (t > 0) tags_joined += ',';
+                                tags_joined += ds_manifest.tags[t];
+                            }
+                            py_args.push_back("--dataset-tags");
+                            py_args.push_back(tags_joined);
+                        }
+                        // Resolve episode paths
+                        std::filesystem::path ds_dir = std::filesystem::absolute(arg);
+                        for (const auto& ep : ds_manifest.episodes) {
+                            py_args.push_back(
+                                (ds_dir / ep.filename).string());
+                        }
+                    }
+                } else {
+                    py_args.push_back(arg);
+                }
             }
 
             // Build C-style argv for execvp
@@ -458,6 +521,7 @@ int main(int argc, char* argv[]) {
     // ---- Headless mode: session name + output directory setup --------------
     std::string session_name = config.session_name;
     std::string output_dir   = config.output_dir;
+    bool headless_auto_session = false;
 
     if (config.headless) {
         // Auto-generate timestamp-based session name if not explicitly provided
@@ -465,6 +529,7 @@ int main(int argc, char* argv[]) {
             // "capture" is the default from Config; treat as unset in headless mode
             if (args.count("session-name") == 0 ||
                 args["session-name"].as<std::string>().empty()) {
+                headless_auto_session = true;
                 session_name = make_session_name();
             }
         }
@@ -494,13 +559,36 @@ int main(int argc, char* argv[]) {
     Stats                          stats;
     std::atomic<bool>              recording_active{false};
     std::atomic<bool>              camera_disconnected{false};
+    std::atomic<int64_t>           last_capture_ms{0};  // steady_clock ms, 0 = no frame yet
     std::string                    current_session_name = session_name;
+    std::string                    last_recording_path_;
 
     // ---- Outer try/catch ---------------------------------------------------
     try {
         // ---- Camera initialization -----------------------------------------
-        auto camera = std::make_unique<RealSensePipeline>();
-        camera->configure_and_start(config.warmup_frames);
+        std::unique_ptr<RealSensePipeline> camera;
+
+        if (config.headless) {
+            // Headless: poll for camera availability (supports hotplug --
+            // the camera may not be connected when the service starts).
+            fprintf(stderr, "[headless] Waiting for RealSense camera...\n");
+            while (!shutdown_flag.load(std::memory_order_acquire)) {
+                try {
+                    camera = std::make_unique<RealSensePipeline>();
+                    camera->configure_and_start(config.warmup_frames);
+                    break;
+                } catch (const rs2::error&) {
+                    camera.reset();
+                    for (int ms = 0; ms < 2000 && !shutdown_flag.load(); ms += 100) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    }
+                }
+            }
+            if (shutdown_flag.load()) return 0;
+        } else {
+            camera = std::make_unique<RealSensePipeline>();
+            camera->configure_and_start(config.warmup_frames);
+        }
 
         fprintf(stderr, "Camera: %s (USB %s)\n",
                 camera->serial_number().c_str(),
@@ -526,6 +614,7 @@ int main(int argc, char* argv[]) {
         auto start_recording = [&](const std::string& sname, const std::string& out_dir,
                                    bool add_timestamp_suffix = true) {
             const std::string filepath = make_output_path(out_dir, sname, add_timestamp_suffix);
+            last_recording_path_ = filepath;
             fprintf(stderr, "Recording to: %s\n", filepath.c_str());
 
             // Create new queue and writer
@@ -538,6 +627,7 @@ int main(int argc, char* argv[]) {
                                                  config.h264_crf);
             writer->write_header(header);
 
+            last_capture_ms.store(0, std::memory_order_release);
             recording_active.store(true, std::memory_order_release);
             stats.recording_started();
 
@@ -587,9 +677,10 @@ int main(int argc, char* argv[]) {
 
         /// Stop recording: flush H.264, finalize file, join writer thread.
         auto stop_recording = [&]() {
-            if (!recording_active.load()) return;
-
-            recording_active.store(false, std::memory_order_release);
+            // Atomic exchange: only one caller proceeds, all others return.
+            // Prevents TOCTOU race when watchdog (main thread) and
+            // handle_disconnect (capture thread) both call stop_recording.
+            if (!recording_active.exchange(false)) return;
             stats.recording_stopped();
 
             if (queue) {
@@ -612,6 +703,12 @@ int main(int argc, char* argv[]) {
                 writer->finalize();
             }
             writer.reset();
+
+            // Auto-register episode in dataset manifest (no-op if no dataset.json)
+            if (!last_recording_path_.empty()) {
+                register_episode(config.output_dir, last_recording_path_);
+                last_recording_path_.clear();
+            }
 
             // Reset H.264 encoder for potential next recording session
             h264.reset();
@@ -700,14 +797,34 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "[gui] Camera reconnected successfully.\n");
             };
 
-            presenter = std::make_unique<GuiPresenter>(
+            auto gui = std::make_unique<GuiPresenter>(
                 config,
                 on_start_recording,
                 on_stop_recording,
                 on_session_name_changed,
                 on_reconnect_requested
             );
+
+            // Show dataset name in GUI if output dir has a manifest
+            if (has_manifest(config.output_dir)) {
+                DatasetManifest ds_manifest;
+                if (load_manifest(config.output_dir, ds_manifest)) {
+                    gui->set_dataset_name(ds_manifest.name);
+                }
+            }
+
+            presenter = std::move(gui);
 #endif
+        }
+
+        // ---- Headless countdown before signaling ready ---------------------
+        if (config.headless) {
+            fprintf(stderr, "[headless] Camera detected -- starting countdown.\n");
+            play_countdown(shutdown_flag);
+            if (shutdown_flag.load()) {
+                if (camera) camera->stop();
+                return 0;
+            }
         }
 
         // ---- Start presenter -----------------------------------------------
@@ -717,13 +834,84 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // ---- For headless mode: start recording immediately ----------------
+        // ---- For headless mode: start recording after countdown ------------
         if (config.headless) {
-            // Pass false: session_name already contains a timestamp from
-            // make_session_name(), so no second timestamp should be appended.
+            // Regenerate session name and output dir with fresh timestamps
+            // (originals were set before camera wait + countdown delay).
+            if (headless_auto_session) {
+                session_name = make_session_name();
+            }
+            output_dir = make_date_dir(config.output_dir);
+            {
+                std::error_code ec;
+                std::filesystem::create_directories(output_dir, ec);
+                if (ec) { output_dir = config.output_dir; }
+            }
             start_recording(session_name, output_dir, /*add_timestamp_suffix=*/false);
             fprintf(stderr, "Press Ctrl+C to stop recording.\n\n");
         }
+
+        // ---- Disconnect handler (shared by both error catch paths) ----------
+        // Returns true if the capture loop should continue, false to break.
+        auto handle_disconnect = [&]() -> bool {
+            if (config.headless) {
+                // Headless: save episode, wait for reconnect, start new episode.
+                // If the watchdog already set camera_disconnected and saved the
+                // episode, skip the duplicate notification and go straight to
+                // the reconnect loop.
+                if (!camera_disconnected.exchange(true, std::memory_order_acq_rel)) {
+                    presenter->on_camera_disconnect();
+                }
+
+                if (recording_active.load(std::memory_order_acquire)) {
+                    stop_recording();
+                    std::thread([]{ play_speech("Episode saved"); }).detach();
+                    fprintf(stderr, "[headless] Episode saved. Waiting for camera...\n");
+                }
+                fprintf(stderr, "[headless] Reconnecting...\n");
+
+                // Auto-retry loop: destroy + sleep + recreate pipeline
+                bool reconnected = false;
+                while (!shutdown_flag.load() && !reconnected) {
+                    camera.reset();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                    try {
+                        camera = std::make_unique<RealSensePipeline>();
+                        camera->configure_and_start(config.warmup_frames);
+                        reconnected = true;
+                    } catch (const rs2::error&) {
+                        camera.reset();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+                    }
+                }
+
+                if (reconnected && !shutdown_flag.load()) {
+                    camera_disconnected.store(false, std::memory_order_release);
+
+                    play_speech("Camera ready");
+                    play_countdown(shutdown_flag);
+                    if (shutdown_flag.load()) return false;
+
+                    presenter->on_camera_reconnect();
+                    session_name = make_session_name();
+                    output_dir = make_date_dir(config.output_dir);
+                    {
+                        std::error_code ec;
+                        std::filesystem::create_directories(output_dir, ec);
+                        if (ec) { output_dir = config.output_dir; }
+                    }
+                    start_recording(session_name, output_dir,
+                                    /*add_timestamp_suffix=*/false);
+                }
+                return true;  // keep looping
+            } else {
+                // GUI mode: show disconnect banner, user triggers reconnect
+                camera_disconnected.store(true, std::memory_order_release);
+                presenter->on_camera_disconnect();
+                return true;
+            }
+        };
 
         // ---- Capture thread ------------------------------------------------
         // Always runs to feed live preview frames (GUI mode) or record frames
@@ -731,9 +919,15 @@ int main(int argc, char* argv[]) {
         // preview even before recording starts.
         std::thread capture_thread([&]() {
             while (!shutdown_flag.load(std::memory_order_acquire)) {
-                // If camera is disconnected (GUI mode), wait for reconnect callback
+                // If camera is disconnected, handle per-mode:
+                //   Headless: drive reconnect from capture thread (handle_disconnect)
+                //   GUI:      sleep until main thread reconnects via user button
                 if (camera_disconnected.load(std::memory_order_acquire)) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    if (config.headless) {
+                        if (!handle_disconnect()) break;
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    }
                     continue;
                 }
 
@@ -743,9 +937,28 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
 
+                // Proactive disconnect detection via rs2 hotplug callback.
+                // Fires within milliseconds of USB unplug -- no need to wait
+                // for poll_frame() to throw after a 15-second timeout.
+                if (camera->is_device_lost()) {
+                    fprintf(stderr, "\n[capture] Camera unplugged (hotplug event)\n");
+                    if (!handle_disconnect()) break;
+                    continue;
+                }
+
                 try {
-                    CapturedFrame frame = camera->poll_frame();
+                    auto maybe_frame = camera->poll_frame();
+
+                    // poll_frame returns nullopt on timeout (500ms). This is
+                    // normal -- loop back to check is_device_lost() and flags.
+                    if (!maybe_frame) continue;
+
+                    CapturedFrame& frame = *maybe_frame;
                     stats.frame_captured();
+                    last_capture_ms.store(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count(),
+                        std::memory_order_release);
 
                     // Feed frame to GUI presenter for live preview
 #ifdef HAVE_GUI
@@ -770,54 +983,9 @@ int main(int argc, char* argv[]) {
                         stats.elapsed_seconds() >= static_cast<double>(max_duration)) {
                         shutdown_flag.store(true, std::memory_order_release);
                     }
-                } catch (const rs2::camera_disconnected_error& e) {
-                    fprintf(stderr, "\n[capture] Camera disconnected: %s\n", e.what());
-
-                    if (config.headless) {
-                        // Headless: notify presenter, then auto-retry every 2s
-                        presenter->on_camera_disconnect();
-                        camera_disconnected.store(true, std::memory_order_release);
-
-                        // Finalize current recording file (new file opened after reconnect)
-                        stop_recording();
-
-                        // Auto-retry loop: destroy + sleep + recreate pipeline
-                        bool reconnected = false;
-                        while (!shutdown_flag.load() && !reconnected) {
-                            camera.reset();
-                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-                            try {
-                                camera = std::make_unique<RealSensePipeline>();
-                                camera->configure_and_start(config.warmup_frames);
-                                reconnected = true;
-                            } catch (const rs2::error&) {
-                                camera.reset();
-                                // Wait remainder of 2s retry interval
-                                std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-                            }
-                        }
-
-                        if (reconnected && !shutdown_flag.load()) {
-                            camera_disconnected.store(false, std::memory_order_release);
-                            presenter->on_camera_reconnect();
-                            // Open new recording file after reconnect.
-                            // Generate a fresh session name with the current
-                            // timestamp so each reconnect produces a distinct file.
-                            session_name = make_session_name();
-                            start_recording(session_name, output_dir,
-                                            /*add_timestamp_suffix=*/false);
-                        }
-                    } else {
-                        // GUI mode: notify presenter (shows banner + Reconnect button)
-                        // Do NOT auto-retry -- user triggers reconnect via button
-                        camera_disconnected.store(true, std::memory_order_release);
-                        presenter->on_camera_disconnect();
-                        // Camera pipeline is left alive; reconnect lambda destroys it
-                    }
                 } catch (const rs2::error& e) {
                     fprintf(stderr, "\n[capture] RealSense error: %s\n", e.what());
-                    shutdown_flag.store(true, std::memory_order_release);
+                    if (!handle_disconnect()) break;
                 }
             }
 
@@ -849,6 +1017,27 @@ int main(int argc, char* argv[]) {
                     fprintf(stderr, "\r%s", stats.summary().c_str());
                     fflush(stderr);
                 }
+
+                // Frame-stall watchdog: if recording but no frames for 1 second,
+                // camera is likely disconnected. Save episode immediately without
+                // waiting for librealsense's 15-second internal reconnect timeout.
+                if (recording_active.load() && !camera_disconnected.load()) {
+                    int64_t last_ms = last_capture_ms.load(std::memory_order_acquire);
+                    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    if (last_ms > 0 && (now_ms - last_ms) > 1000) {
+                        fprintf(stderr, "\n[headless] No frames for 1s -- saving episode\n");
+                        stop_recording();
+                        std::thread([]{ play_speech("Episode saved"); }).detach();
+
+                        // Signal the capture thread that we've already saved.
+                        // When it eventually unblocks from librealsense's
+                        // internal 15-second timeout, it will see this flag
+                        // and go straight to the reconnect loop.
+                        camera_disconnected.store(true, std::memory_order_release);
+                        presenter->on_camera_disconnect();
+                    }
+                }
             }
         }
 
@@ -863,7 +1052,7 @@ int main(int argc, char* argv[]) {
         // Shutdown presenter (sends STOPPING=1 for headless, destroys ImGui for GUI)
         presenter->shutdown();
 
-        // Stop camera
+        // Stop camera (stop() is safe even if device was unplugged)
         if (camera) {
             camera->stop();
         }

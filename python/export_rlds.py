@@ -47,8 +47,11 @@ class EgoRecDataset(tfds.core.GeneratorBasedBuilder):
     def _get_pkg_dir_path(cls):
         return Path(__file__).parent
 
-    def __init__(self, egorec_paths, dataset_name=None, **kwargs):
+    def __init__(self, egorec_paths, dataset_name=None,
+                 dataset_description=None, dataset_tags=None, **kwargs):
         self._egorec_paths = [Path(p) for p in egorec_paths]
+        self._dataset_description = dataset_description or ''
+        self._dataset_tags = dataset_tags or ''
 
         if dataset_name is None:
             reader = egorec_reader.EgorecFile(str(self._egorec_paths[0]))
@@ -87,6 +90,8 @@ class EgoRecDataset(tfds.core.GeneratorBasedBuilder):
                     'file_path': tfds.features.Text(),
                     'session_name': tfds.features.Text(),
                     'duration_s': tfds.features.Scalar(dtype=np.float64),
+                    'dataset_name': tfds.features.Text(),
+                    'dataset_description': tfds.features.Text(),
                 }),
             }),
         )
@@ -172,6 +177,8 @@ class EgoRecDataset(tfds.core.GeneratorBasedBuilder):
                     'file_path': str(episode_path),
                     'session_name': session_name,
                     'duration_s': duration_s,
+                    'dataset_name': self.name,
+                    'dataset_description': self._dataset_description,
                 },
             }
 
@@ -188,6 +195,12 @@ def main():
                         help='Dataset name (default: session name from first file)')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress progress output')
+    parser.add_argument('--dataset-name', default=None,
+                        help='Dataset name (from dataset.json manifest)')
+    parser.add_argument('--dataset-description', default=None,
+                        help='Dataset description (from dataset.json manifest)')
+    parser.add_argument('--dataset-tags', default=None,
+                        help='Comma-separated dataset tags (from dataset.json manifest)')
     args = parser.parse_args()
 
     _quiet = args.quiet
@@ -207,9 +220,14 @@ def main():
         print(f"Exporting {len(args.files)} file(s) to RLDS format")
         print(f"Output: {args.output}")
 
+    # Dataset manifest name takes priority over --name
+    effective_name = args.dataset_name or args.name
+
     builder = EgoRecDataset(
         egorec_paths=args.files,
-        dataset_name=args.name,
+        dataset_name=effective_name,
+        dataset_description=args.dataset_description,
+        dataset_tags=args.dataset_tags,
         data_dir=args.output,
     )
 

@@ -139,14 +139,9 @@ Pass `--config path/to/config.toml` or use CLI flags. CLI flags override config 
 
 See `deploy/config.toml.example` for the full TOML config reference.
 
-## Headless / systemd deployment
+## Production deployment
 
-```bash
-sudo deploy/install.sh
-sudo systemctl start ego-recorder
-```
-
-This installs the binary, config, systemd unit, udev rules, and lid-close prevention. See `deploy/install.sh` for details.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full production setup guide covering GUI mode, headless systemd service, udev rules, lid-close prevention, monitoring, updating, and troubleshooting.
 
 ## File format
 

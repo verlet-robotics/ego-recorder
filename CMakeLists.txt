@@ -69,6 +69,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tomlplusplus)
 
+# nlohmann/json for dataset manifest (dataset.json read/write)
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
 # Zdepth depth compressor via FetchContent
 # CRITICAL: Create a 'zstd' INTERFACE target BEFORE fetching Zdepth so that
 # Zdepth's CMakeLists.txt (which checks `if(NOT TARGET zstd)`) skips its
@@ -198,8 +208,11 @@ add_executable(ego-recorder
     src/storage/file_writer.cpp
     src/utils/signal_handler.cpp
     src/utils/stats.cpp
+    src/utils/audio_alert.cpp
     src/config/config.cpp
     src/presenter/headless_presenter.cpp
+    src/dataset/dataset_manifest.cpp
+    src/dataset/dataset_commands.cpp
 )
 
 # gui_presenter.cpp is only compiled when WITH_GUI=ON (added in plan 02-02)
@@ -219,6 +232,7 @@ target_link_libraries(ego-recorder PRIVATE
     PkgConfig::SWSCALE
     cxxopts::cxxopts
     tomlplusplus::tomlplusplus
+    nlohmann_json::nlohmann_json
     pthread
 )
 
@@ -264,6 +278,8 @@ if(BUILD_TESTS)
         tests/test_stats.cpp
         tests/test_config.cpp
         tests/test_integration.cpp
+        tests/test_dataset_manifest.cpp
+        src/dataset/dataset_manifest.cpp
         ${TEST_COMMON_SOURCES}
     )
 
@@ -277,6 +293,7 @@ if(BUILD_TESTS)
         PkgConfig::AVUTIL
         PkgConfig::SWSCALE
         tomlplusplus::tomlplusplus
+        nlohmann_json::nlohmann_json
         pthread
     )
 

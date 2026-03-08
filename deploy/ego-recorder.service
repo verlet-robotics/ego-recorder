@@ -10,6 +10,7 @@ ExecStart=/usr/local/bin/ego-recorder --headless --config /etc/ego-recorder/conf
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s
+TimeoutStartSec=infinity
 NotifyAccess=main
 RuntimeDirectory=ego-recorder
 RuntimeDirectoryMode=0750

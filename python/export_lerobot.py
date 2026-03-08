@@ -137,6 +137,12 @@ def main():
                         help='Create separate dataset per recording (default: merge into one)')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress progress output')
+    parser.add_argument('--dataset-name', default=None,
+                        help='Dataset name (from dataset.json manifest)')
+    parser.add_argument('--dataset-description', default=None,
+                        help='Dataset description (from dataset.json manifest)')
+    parser.add_argument('--dataset-tags', default=None,
+                        help='Comma-separated dataset tags (from dataset.json manifest)')
     args = parser.parse_args()
 
     for f in args.files:
@@ -144,11 +150,14 @@ def main():
             print(f"Error: file not found: {f}", file=sys.stderr)
             sys.exit(1)
 
+    # Dataset manifest name takes priority over --name, which takes priority over file header
+    effective_name = args.dataset_name or args.name
+
     if args.separate:
         for f in args.files:
             reader = egorec_reader.EgorecFile(f)
             header = reader.header()
-            name = args.name or header.get('session_name', Path(f).stem)
+            name = effective_name or header.get('session_name', Path(f).stem)
             repo_id = f"local/{name}"
 
             if args.output:
@@ -163,7 +172,7 @@ def main():
     else:
         first_reader = egorec_reader.EgorecFile(args.files[0])
         first_header = first_reader.header()
-        name = args.name or first_header.get('session_name', 'ego_recording')
+        name = effective_name or first_header.get('session_name', 'ego_recording')
         repo_id = f"local/{name}"
 
         if args.output:

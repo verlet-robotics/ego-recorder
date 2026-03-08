@@ -233,6 +233,12 @@ bool GuiPresenter::tick()
 
     ImGui::Begin("Controls", nullptr, ctrl_flags);
     {
+        // Dataset label (shown if recording to a dataset directory)
+        if (!dataset_name_.empty()) {
+            ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
+                "Dataset: %s", dataset_name_.c_str());
+        }
+
         // Session name input
         ImGui::SetNextItemWidth(300.0f);
         if (ImGui::InputText("Session Name", &session_name_)) {

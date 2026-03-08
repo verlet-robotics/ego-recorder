@@ -1,6 +1,8 @@
 #pragma once
 
 #include <librealsense2/rs.hpp>
+#include <atomic>
+#include <optional>
 #include <string>
 #include <cstdint>
 
@@ -11,10 +13,15 @@
 /// Handles device initialization, stream configuration, intrinsics/extrinsics
 /// extraction, IMU detection, auto-exposure warmup, and frame polling.
 ///
+/// Registers an rs2::context device-changed callback for instant USB hotplug
+/// disconnect detection. Check is_device_lost() rather than waiting for
+/// poll_frame() to throw after a 15-second timeout.
+///
 /// Usage:
 ///   RealSensePipeline pipeline;
 ///   pipeline.configure_and_start();          // blocks for warmup (~1 sec)
 ///   while (running) {
+///       if (pipeline.is_device_lost()) { /* handle disconnect */ break; }
 ///       CapturedFrame frame = pipeline.poll_frame();  // blocks until next frame
 ///       // process frame ...
 ///   }
@@ -51,16 +58,20 @@ public:
     /// Stop the pipeline and release the device.
     void stop();
 
-    /// Block until the next frameset arrives, copy data into a CapturedFrame, and return it.
+    /// Wait up to \p timeout_ms for the next frameset, copy data into a
+    /// CapturedFrame, and return it. Returns std::nullopt on timeout (no frame
+    /// available), allowing the caller to check is_device_lost() promptly.
     ///
-    /// The returned CapturedFrame owns its data via vectors -- the SDK frame
-    /// is released when this function returns.
-    ///
-    /// @return CapturedFrame with timestamp_us, frame_number, rgb_data, depth_data,
-    ///         and imu_samples (empty if D435, populated if D435i).
-    CapturedFrame poll_frame();
+    /// @param timeout_ms  Max wait time in milliseconds (default: 500)
+    /// @return CapturedFrame if a frame arrived, std::nullopt on timeout.
+    std::optional<CapturedFrame> poll_frame(unsigned int timeout_ms = 500);
 
     // ---- Accessors for camera metadata (used by main.cpp to assemble FileHeader) ----
+
+    /// Returns true if the device was removed (USB unplug detected via hotplug callback).
+    /// Fires within milliseconds of physical disconnect -- no need to wait for poll_frame()
+    /// to throw. Check this before each poll_frame() call.
+    bool is_device_lost() const { return device_lost_.load(std::memory_order_acquire); }
 
     /// Returns true if IMU streams were successfully enabled (D435i mode).
     bool has_imu() const { return has_imu_; }
@@ -84,8 +95,11 @@ public:
     rs2_extrinsics depth_to_color_extrinsics() const { return depth_to_color_extrinsics_; }
 
 private:
-    rs2::pipeline         pipe_;
+    rs2::context          ctx_;
+    rs2::pipeline         pipe_{ctx_};
     rs2::pipeline_profile profile_;
+    rs2::device           device_;              ///< Active device (for hotplug check)
+    std::atomic<bool>     device_lost_{false};  ///< Set by hotplug callback
 
     rs2_intrinsics   depth_intrinsics_           {};
     rs2_intrinsics   color_intrinsics_            {};

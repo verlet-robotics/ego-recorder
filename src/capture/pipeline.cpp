@@ -1,6 +1,7 @@
 #include "capture/pipeline.h"
 
 #include <cstdio>
+#include <optional>
 #include <stdexcept>
 
 void RealSensePipeline::configure_and_start(int warmup_frames)
@@ -36,11 +37,22 @@ void RealSensePipeline::configure_and_start(int warmup_frames)
     }
 
     // -------------------------------------------------------------------------
-    // 3. Extract device info
+    // 3. Extract device info + register hotplug callback
     // -------------------------------------------------------------------------
-    auto dev = profile_.get_device();
-    serial_number_ = dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
-    usb_type_      = dev.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+    device_ = profile_.get_device();
+    serial_number_ = device_.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER);
+    usb_type_      = device_.get_info(RS2_CAMERA_INFO_USB_TYPE_DESCRIPTOR);
+
+    // Register device-changed callback for instant disconnect detection.
+    // Fires on a librealsense background thread within milliseconds of USB
+    // unplug -- much faster than waiting for wait_for_frames() to time out.
+    device_lost_.store(false, std::memory_order_release);
+    ctx_.set_devices_changed_callback(
+        [this](rs2::event_information& info) {
+            if (info.was_removed(device_)) {
+                device_lost_.store(true, std::memory_order_release);
+            }
+        });
 
     if (!usb_type_.empty() && usb_type_[0] == '2') {
         fprintf(stderr,
@@ -98,13 +110,21 @@ void RealSensePipeline::configure_and_start(int warmup_frames)
 
 void RealSensePipeline::stop()
 {
-    pipe_.stop();
+    try {
+        pipe_.stop();
+    } catch (const rs2::error&) {
+        // Device may already be gone (USB unplug) -- stop() can throw
+    }
 }
 
-CapturedFrame RealSensePipeline::poll_frame()
+std::optional<CapturedFrame> RealSensePipeline::poll_frame(unsigned int timeout_ms)
 {
-    // Block until the next synchronized frameset arrives from the pipeline.
-    rs2::frameset frames = pipe_.wait_for_frames();
+    // Wait with a short timeout so the caller can check is_device_lost()
+    // promptly after a USB unplug, rather than blocking for 15 seconds.
+    rs2::frameset frames;
+    if (!pipe_.try_wait_for_frames(&frames, timeout_ms)) {
+        return std::nullopt;  // No frame within timeout -- let caller re-check
+    }
 
     // Extract color and depth frames from the synchronized set.
     rs2::video_frame color = frames.get_color_frame();
