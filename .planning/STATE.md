@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-03-08
 **Current phase:** 03-optimized-compression-export-tools
-**Current plan:** 2 of 5 (COMPLETE)
-**Next action:** Phase 3 plan 2 complete. Pipeline wired with H.264+Zdepth, info/export CLI ready. Next: Python reader module (pybind11).
+**Current plan:** 3 of 5 (COMPLETE)
+**Next action:** Phase 3 plan 3 complete. egorec_reader.so Python module built and importable. Next: RLDS export script (plan 04).
 
 ---
 
@@ -13,7 +13,7 @@
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
 | 2 | COMPLETE (4/4 plans done, physical camera verified) | GUI mode + headless systemd service |
-| 3 | IN PROGRESS (2/5 plans done) | Optimized compression + export tools |
+| 3 | IN PROGRESS (3/5 plans done) | Optimized compression + export tools |
 
 ---
 
@@ -69,6 +69,9 @@
 | Subcommand dispatch | info/export intercepted before cxxopts parsing via argv[1] check | 2026-03-08 |
 | Zdepth GOP strategy | Keyframe every 30 frames (frame_number % 30 == 0) for ~1s seek granularity | 2026-03-08 |
 | Export dispatch | execvp to Python with PYTHONPATH set to binary directory for .so module discovery | 2026-03-08 |
+| ZdepthCompressor in pybind11 module | unique_ptr member to defer init; source compiled directly into .so for symbol availability | 2026-03-08 |
+| H.264 decoder multi-frame queue | deque buffers decoded RGB frames from single-packet multi-output scenarios | 2026-03-08 |
+| Trailing flush recovery | Reader reads bytes between last indexed frame end and index_offset to recover H.264 flush NALs | 2026-03-08 |
 
 ---
 
@@ -96,6 +99,7 @@
 | 2026-02-19 | 02-04 | ~35 min | 3/3 | 17f77a9, 8e6e3e5, bb265cd |
 | 2026-03-08 | 03-01 | ~5 min | 3/3 | d1dcfa4, 0343e3a, 65dd038 |
 | 2026-03-08 | 03-02 | ~3 min | 2/2 | 977afe4, 2fa2dc3 |
+| 2026-03-08 | 03-03 | ~3 min | 2/2 | 901b25d, e05f5fc |
 
 ---
 
