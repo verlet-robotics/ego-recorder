@@ -75,6 +75,8 @@
 #include <thread>
 #include <vector>
 
+#include <unistd.h>
+
 #include <librealsense2/rs.hpp>
 
 // ---- Helpers ---------------------------------------------------------------
@@ -217,6 +219,150 @@ static FileHeader make_file_header(const RealSensePipeline& camera,
 // ---- main ------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+    // ---- Subcommand dispatch (before cxxopts parsing) ----------------------
+    if (argc >= 2) {
+        std::string_view cmd = argv[1];
+
+        // ---- info subcommand (pure C++, no Python dependency) ----
+        if (cmd == "info") {
+            if (argc < 3) {
+                fprintf(stderr, "Usage: ego-recorder info <file.egorec> [...]\n");
+                return 1;
+            }
+            for (int i = 2; i < argc; ++i) {
+                const char* path = argv[i];
+                std::ifstream in(path, std::ios::binary);
+                if (!in.is_open()) {
+                    fprintf(stderr, "Error: cannot open '%s'\n", path);
+                    continue;
+                }
+                FileHeader hdr;
+                in.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+                if (!in.good() || std::memcmp(hdr.magic, "EGOREC", 6) != 0) {
+                    fprintf(stderr, "Error: '%s' is not a valid .egorec file\n", path);
+                    continue;
+                }
+
+                // Read footer for frame count and duration
+                in.seekg(-static_cast<int>(sizeof(FileFooter)), std::ios::end);
+                FileFooter footer;
+                in.read(reinterpret_cast<char*>(&footer), sizeof(footer));
+                bool has_footer = in.good() && footer.footer_magic == FOOTER_MAGIC;
+
+                printf("File: %s\n", path);
+                printf("  Format version: %d.%d\n", hdr.magic[6], hdr.magic[7]);
+                printf("  Session: %s\n", hdr.session_name);
+                printf("  Serial: %s\n", hdr.serial_number);
+                printf("  USB: %s\n", hdr.usb_type);
+                printf("  Resolution: %ux%u (depth), %ux%u (color)\n",
+                       hdr.depth_width, hdr.depth_height,
+                       hdr.color_width, hdr.color_height);
+                printf("  Depth scale: %.6f\n", hdr.depth_scale);
+                printf("  RGB codec: %s (%d)\n",
+                       hdr.rgb_codec == 0 ? "raw" : hdr.rgb_codec == 1 ? "JPEG" : hdr.rgb_codec == 2 ? "H264" : "unknown",
+                       hdr.rgb_codec);
+                printf("  Depth codec: %s (%d)\n",
+                       hdr.depth_codec == 0 ? "raw" : hdr.depth_codec == 1 ? "ZSTD" : hdr.depth_codec == 2 ? "Zdepth" : "unknown",
+                       hdr.depth_codec);
+                printf("  RGB quality/CRF: %d\n", hdr.rgb_quality);
+                printf("  Depth intrinsics: fx=%.2f fy=%.2f ppx=%.2f ppy=%.2f\n",
+                       hdr.depth_fx, hdr.depth_fy, hdr.depth_ppx, hdr.depth_ppy);
+                printf("  Color intrinsics: fx=%.2f fy=%.2f ppx=%.2f ppy=%.2f\n",
+                       hdr.color_fx, hdr.color_fy, hdr.color_ppx, hdr.color_ppy);
+                printf("  IMU: %s\n", (hdr.flags & 0x01) ? "yes" : "no");
+                if (has_footer) {
+                    printf("  Frames: %" PRIu64 "\n", footer.total_frames);
+                    printf("  Duration: %.2f s\n", footer.total_duration_us / 1e6);
+                }
+                printf("\n");
+            }
+            return 0;
+        }
+
+        // ---- export subcommand (dispatches to Python scripts) ----
+        // Per locked decision: `ego-recorder export rlds` and `ego-recorder export lerobot`
+        if (cmd == "export") {
+            if (argc < 3) {
+                fprintf(stderr, "Usage: ego-recorder export <rlds|lerobot> [options] <file.egorec> [...]\n");
+                return 1;
+            }
+            std::string_view format = argv[2];
+
+            // Locate the Python script relative to the binary.
+            // Try: (1) ../python/ relative to binary, (2) ./python/ from cwd
+            std::string binary_path = std::filesystem::canonical(
+                std::filesystem::path(argv[0])).parent_path().string();
+            std::string script;
+
+            if (format == "rlds") {
+                script = "export_rlds.py";
+            } else if (format == "lerobot") {
+                script = "export_lerobot.py";
+            } else {
+                fprintf(stderr, "Error: unknown export format '%.*s'\n",
+                        static_cast<int>(format.size()), format.data());
+                fprintf(stderr, "Supported formats: rlds, lerobot\n");
+                return 1;
+            }
+
+            // Search for the script in likely locations
+            std::vector<std::string> search_paths = {
+                binary_path + "/../python/" + script,
+                binary_path + "/python/" + script,
+                "python/" + script,
+            };
+
+            std::string script_path;
+            for (const auto& p : search_paths) {
+                if (std::filesystem::exists(p)) {
+                    script_path = std::filesystem::canonical(p).string();
+                    break;
+                }
+            }
+
+            if (script_path.empty()) {
+                fprintf(stderr, "Error: could not find %s\n", script.c_str());
+                fprintf(stderr, "Looked in:\n");
+                for (const auto& p : search_paths) {
+                    fprintf(stderr, "  %s\n", p.c_str());
+                }
+                fprintf(stderr, "\nYou can also run directly:\n");
+                fprintf(stderr, "  PYTHONPATH=build python python/%s [options] <files>\n",
+                        script.c_str());
+                return 1;
+            }
+
+            // Build argv for Python: python3 script_path [remaining args...]
+            // Skip argv[0] (ego-recorder) and argv[1] (export) and argv[2] (format)
+            std::vector<std::string> py_args = {"python3", script_path};
+            for (int i = 3; i < argc; ++i) {
+                py_args.push_back(argv[i]);
+            }
+
+            // Build C-style argv for execvp
+            std::vector<char*> c_args;
+            for (auto& a : py_args) {
+                c_args.push_back(a.data());
+            }
+            c_args.push_back(nullptr);
+
+            // Set PYTHONPATH to include the build directory (for egorec_reader.so)
+            std::string pythonpath = binary_path;
+            const char* existing = std::getenv("PYTHONPATH");
+            if (existing && existing[0] != '\0') {
+                pythonpath += ":";
+                pythonpath += existing;
+            }
+            setenv("PYTHONPATH", pythonpath.c_str(), 1);
+
+            execvp("python3", c_args.data());
+
+            // execvp only returns on error
+            fprintf(stderr, "Error: failed to exec python3: %s\n", strerror(errno));
+            return 1;
+        }
+    }
+
     // ---- CLI Parsing -------------------------------------------------------
     cxxopts::Options options("ego-recorder",
         "Record synchronized RGBD data from Intel RealSense D435/D435i to .egorec files");
