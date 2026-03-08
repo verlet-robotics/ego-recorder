@@ -114,8 +114,8 @@ private:
 
     // ---- Shared frame buffer (capture thread writes, render thread reads) ----
     std::mutex              frame_mutex_;
-    int                     frame_width_  = 640;
-    int                     frame_height_ = 480;
+    int                     frame_width_  = 1280;
+    int                     frame_height_ = 720;
     float                   depth_scale_  = 0.001f;
     std::vector<uint8_t>    rgb_buf_;        ///< Latest RGB24 data (shared)
     std::vector<uint8_t>    depth_buf_;      ///< Latest Z16 data as bytes (shared)

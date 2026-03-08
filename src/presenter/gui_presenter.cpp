@@ -36,8 +36,8 @@ GuiPresenter::GuiPresenter(
     , on_reconnect_requested_(std::move(on_reconnect_requested))
     , session_name_(config.session_name)
 {
-    const int w = 640;
-    const int h = 480;
+    const int w = config.frame_width;
+    const int h = config.frame_height;
 
     rgb_buf_.resize(static_cast<size_t>(w * h * 3), 0);
     depth_buf_.resize(static_cast<size_t>(w * h * 2), 0);

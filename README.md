@@ -17,14 +17,16 @@ Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to
 ### One-line setup
 
 ```bash
-./setup.sh          # interactive -- prompts for build options
-./setup.sh --all    # full build (GUI + Python + tests)
-./setup.sh --headless  # headless only (no GUI)
+./setup.sh             # full install (deps + build + Python export tools)
+./setup.sh --headless  # headless only (no GUI, no Python)
 ```
 
-The setup script installs all system dependencies (including the Intel RealSense SDK), builds the project, and optionally installs Python export tools and the systemd service. Run `./setup.sh --help` for all options.
+The setup script installs all system dependencies (including the Intel RealSense SDK), builds the project, and installs Python export tools. Run `./setup.sh --help` for all options or `./setup.sh --interactive` to choose components individually.
 
 ### Manual setup
+
+<details>
+<summary>Click to expand manual steps (not needed if you used setup.sh)</summary>
 
 #### Dependencies
 
@@ -70,6 +72,15 @@ Build options:
 - `-DWITH_PYTHON=OFF` -- skip Python extension module (no pybind11)
 - `-DBUILD_TESTS=OFF` -- skip unit tests
 
+#### Python export dependencies
+
+```bash
+pip install tensorflow-datasets numpy tqdm   # for RLDS export
+pip install lerobot numpy tqdm               # for LeRobot export
+```
+
+</details>
+
 ### Record (GUI)
 
 ```bash
@@ -99,13 +110,12 @@ Shows format version, codecs, frame count, duration, resolution, and camera intr
 ### Export to RLDS (TFRecord)
 
 ```bash
-pip install tensorflow-datasets numpy tqdm
-python python/export_rlds.py recording.egorec -o ./rlds_output
+./build/ego-recorder export rlds recording.egorec -o ./rlds_output
 ```
 
-Or via the binary:
+Or call the Python script directly:
 ```bash
-./build/ego-recorder export rlds recording.egorec -o ./rlds_output
+python python/export_rlds.py recording.egorec -o ./rlds_output
 ```
 
 Options: `--quiet` to suppress progress bar. Accepts multiple files for batch export.
@@ -113,16 +123,110 @@ Options: `--quiet` to suppress progress bar. Accepts multiple files for batch ex
 ### Export to LeRobot v3
 
 ```bash
-pip install lerobot numpy tqdm
-python python/export_lerobot.py recording.egorec -o ./lerobot_output
-```
-
-Or via the binary:
-```bash
 ./build/ego-recorder export lerobot recording.egorec -o ./lerobot_output
 ```
 
+Or call the Python script directly:
+```bash
+python python/export_lerobot.py recording.egorec -o ./lerobot_output
+```
+
 Options: `--separate` to create one dataset per file (default merges all into one). `--quiet` to suppress progress bar.
+
+## Dataset management
+
+Organize multiple recordings into a dataset with metadata for structured ML export.
+
+### Initialize a dataset
+
+Use the interactive setup script:
+
+```bash
+./scripts/setup-recordings.sh
+```
+
+Or use the CLI directly:
+
+```bash
+./build/ego-recorder dataset init -o ./my_dataset --name "kitchen-pick" \
+  --description "Picking objects from a kitchen shelf" \
+  --tags "manipulation,kitchen,pick-and-place"
+```
+
+Creates a `dataset.json` manifest in the directory. Use `--force` to overwrite an existing one.
+
+### Record into a dataset
+
+Record directly into the dataset directory -- episodes are auto-registered into the manifest when recording stops:
+
+```bash
+# GUI mode
+./build/ego-recorder -o ./my_dataset -s pick_001
+
+# Headless mode
+./build/ego-recorder --headless -o ./my_dataset -d 30
+```
+
+Each episode's metadata (session name, timestamp, duration, frame count) is automatically extracted from the `.egorec` file header and footer.
+
+### Add existing recordings
+
+```bash
+./build/ego-recorder dataset add ./my_dataset recording1.egorec recording2.egorec
+```
+
+Duplicate filenames are silently skipped (idempotent).
+
+### Inspect a dataset
+
+```bash
+./build/ego-recorder dataset info ./my_dataset
+```
+
+Shows dataset name, description, tags, per-episode details, and totals.
+
+### Remove an episode
+
+```bash
+./build/ego-recorder dataset remove ./my_dataset recording1.egorec
+```
+
+### Export a dataset
+
+Pass the dataset directory (instead of individual files) to preserve manifest metadata in the export:
+
+```bash
+# RLDS
+./build/ego-recorder export rlds ./my_dataset -o ./rlds_output
+
+# LeRobot v3
+./build/ego-recorder export lerobot ./my_dataset -o ./lerobot_output
+```
+
+The exporter reads `dataset.json`, resolves all episode paths, and passes the dataset name, description, and tags through to the exported format.
+
+### Manifest format
+
+The `dataset.json` manifest:
+
+```json
+{
+  "version": 1,
+  "name": "kitchen-pick",
+  "description": "Picking objects from a kitchen shelf",
+  "tags": ["manipulation", "kitchen", "pick-and-place"],
+  "created": "2026-03-08T12:00:00Z",
+  "episodes": [
+    {
+      "filename": "pick_001_20260308_120000.egorec",
+      "session_name": "pick_001",
+      "recorded_at": "2026-03-08T12:00:00Z",
+      "duration_s": 30.5,
+      "frames": 915
+    }
+  ]
+}
+```
 
 ## Configuration
 

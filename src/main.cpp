@@ -86,13 +86,45 @@
 
 // ---- Helpers ---------------------------------------------------------------
 
-/// Generate a timestamp-based session name: "capture_YYYYMMDD_HHMMSS"
-static std::string make_session_name() {
-    std::time_t now = std::time(nullptr);
-    std::tm* tm_info = std::localtime(&now);
-    char ts[32];
-    std::strftime(ts, sizeof(ts), "%Y%m%d_%H%M%S", tm_info);
-    return std::string("capture_") + ts;
+/// Frame gap threshold for soft episode split in headless mode.
+/// If recording is active and no frames arrive for this long (but less than
+/// the hard 1s watchdog), split into a new episode. This catches brief
+/// USB disconnects where librealsense reconnects internally.
+static constexpr int64_t EPISODE_SPLIT_MS = 500;
+
+/// Generate an indexed session name: "{dataset}_{NNN}"
+/// Scans the output directory tree for existing .egorec files matching the
+/// pattern to find the next available index.
+static std::string make_session_name(const std::string& output_dir) {
+    // Dataset name = last path component of the base output dir
+    // e.g. /var/lib/ego-recorder/pick → "pick"
+    std::filesystem::path base(output_dir);
+    // Strip trailing slashes
+    while (base.has_filename() && base.filename() == ".") {
+        base = base.parent_path();
+    }
+    std::string dataset = base.filename().string();
+    if (dataset.empty()) dataset = "capture";
+
+    // Scan for existing {dataset}_NNN.egorec files to find the max index
+    int max_idx = -1;
+    std::string prefix = dataset + "_";
+    std::error_code ec;
+    for (auto& entry : std::filesystem::recursive_directory_iterator(output_dir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        auto fname = entry.path().stem().string();  // without .egorec
+        if (fname.size() > prefix.size() && fname.substr(0, prefix.size()) == prefix) {
+            auto suffix = fname.substr(prefix.size());
+            try {
+                int idx = std::stoi(suffix);
+                if (idx > max_idx) max_idx = idx;
+            } catch (...) {}
+        }
+    }
+
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%s_%03d", dataset.c_str(), max_idx + 1);
+    return std::string(buf);
 }
 
 /// Generate date-based output directory for headless mode:
@@ -119,9 +151,9 @@ static std::string make_date_dir(const std::string& output_dir) {
 /// When add_timestamp_suffix is false (headless mode):
 ///   {dir}/{session}.egorec
 ///
-/// In headless mode, make_session_name() already embeds the timestamp inside
-/// the session name (e.g. "capture_20260219_090520"), so appending a second
-/// timestamp would produce a double-timestamp filename.
+/// In headless mode, make_session_name() produces indexed names like
+/// "pick_003", so add_timestamp_suffix is false to avoid appending a
+/// redundant timestamp.
 static std::string make_output_path(const std::string& output_dir,
                                     const std::string& session_name,
                                     bool add_timestamp_suffix = true) {
@@ -306,7 +338,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        // ---- export subcommand (dispatches to Python scripts) ----
+        // ---- export subcommand (dispatches to Rust ego-convert binary) ----
         // Per locked decision: `ego-recorder export rlds` and `ego-recorder export lerobot`
         if (cmd == "export") {
             if (argc < 3) {
@@ -315,56 +347,49 @@ int main(int argc, char* argv[]) {
             }
             std::string_view format = argv[2];
 
-            // Locate the Python script relative to the binary.
-            // Try: (1) ../python/ relative to binary, (2) ./python/ from cwd
-            std::string binary_path = std::filesystem::canonical(
-                std::filesystem::path(argv[0])).parent_path().string();
-            std::string script;
-
-            if (format == "rlds") {
-                script = "export_rlds.py";
-            } else if (format == "lerobot") {
-                script = "export_lerobot.py";
-            } else {
+            if (format != "rlds" && format != "lerobot") {
                 fprintf(stderr, "Error: unknown export format '%.*s'\n",
                         static_cast<int>(format.size()), format.data());
                 fprintf(stderr, "Supported formats: rlds, lerobot\n");
                 return 1;
             }
 
-            // Search for the script in likely locations
+            // Locate the ego-convert binary relative to this binary.
+            std::string binary_path = std::filesystem::canonical(
+                std::filesystem::path(argv[0])).parent_path().string();
+
             std::vector<std::string> search_paths = {
-                binary_path + "/../python/" + script,
-                binary_path + "/python/" + script,
-                "python/" + script,
+                binary_path + "/ego-convert",
+                binary_path + "/../rust/target/release/ego-convert",
+                "rust/target/release/ego-convert",
             };
 
-            std::string script_path;
+            std::string ego_convert_path;
             for (const auto& p : search_paths) {
                 if (std::filesystem::exists(p)) {
-                    script_path = std::filesystem::canonical(p).string();
+                    ego_convert_path = std::filesystem::canonical(p).string();
                     break;
                 }
             }
 
-            if (script_path.empty()) {
-                fprintf(stderr, "Error: could not find %s\n", script.c_str());
+            if (ego_convert_path.empty()) {
+                fprintf(stderr, "Error: could not find ego-convert binary\n");
                 fprintf(stderr, "Looked in:\n");
                 for (const auto& p : search_paths) {
                     fprintf(stderr, "  %s\n", p.c_str());
                 }
-                fprintf(stderr, "\nYou can also run directly:\n");
-                fprintf(stderr, "  PYTHONPATH=build python python/%s [options] <files>\n",
-                        script.c_str());
+                fprintf(stderr, "\nBuild with: cd rust && cargo build --release\n");
+                fprintf(stderr, "Or run directly: rust/target/release/ego-convert %.*s [options] <files>\n",
+                        static_cast<int>(format.size()), format.data());
                 return 1;
             }
 
-            // Build argv for Python: python3 script_path [remaining args...]
-            // Skip argv[0] (ego-recorder) and argv[1] (export) and argv[2] (format)
+            // Build argv for ego-convert: ego-convert <format> [remaining args...]
+            // Skip argv[0] (ego-recorder) and argv[1] (export)
             //
             // If a positional arg is a directory with dataset.json, expand it
             // to the resolved .egorec file paths and add dataset metadata flags.
-            std::vector<std::string> py_args = {"python3", script_path};
+            std::vector<std::string> conv_args = {ego_convert_path, std::string(format)};
             for (int i = 3; i < argc; ++i) {
                 std::string arg = argv[i];
                 // Check if this arg is a dataset directory (not a flag)
@@ -374,12 +399,12 @@ int main(int argc, char* argv[]) {
                     if (load_manifest(arg, ds_manifest)) {
                         // Add dataset metadata flags
                         if (!ds_manifest.name.empty()) {
-                            py_args.push_back("--dataset-name");
-                            py_args.push_back(ds_manifest.name);
+                            conv_args.push_back("--dataset-name");
+                            conv_args.push_back(ds_manifest.name);
                         }
                         if (!ds_manifest.description.empty()) {
-                            py_args.push_back("--dataset-description");
-                            py_args.push_back(ds_manifest.description);
+                            conv_args.push_back("--dataset-description");
+                            conv_args.push_back(ds_manifest.description);
                         }
                         if (!ds_manifest.tags.empty()) {
                             std::string tags_joined;
@@ -387,41 +412,32 @@ int main(int argc, char* argv[]) {
                                 if (t > 0) tags_joined += ',';
                                 tags_joined += ds_manifest.tags[t];
                             }
-                            py_args.push_back("--dataset-tags");
-                            py_args.push_back(tags_joined);
+                            conv_args.push_back("--dataset-tags");
+                            conv_args.push_back(tags_joined);
                         }
                         // Resolve episode paths
                         std::filesystem::path ds_dir = std::filesystem::absolute(arg);
                         for (const auto& ep : ds_manifest.episodes) {
-                            py_args.push_back(
+                            conv_args.push_back(
                                 (ds_dir / ep.filename).string());
                         }
                     }
                 } else {
-                    py_args.push_back(arg);
+                    conv_args.push_back(arg);
                 }
             }
 
             // Build C-style argv for execvp
             std::vector<char*> c_args;
-            for (auto& a : py_args) {
+            for (auto& a : conv_args) {
                 c_args.push_back(a.data());
             }
             c_args.push_back(nullptr);
 
-            // Set PYTHONPATH to include the build directory (for egorec_reader.so)
-            std::string pythonpath = binary_path;
-            const char* existing = std::getenv("PYTHONPATH");
-            if (existing && existing[0] != '\0') {
-                pythonpath += ":";
-                pythonpath += existing;
-            }
-            setenv("PYTHONPATH", pythonpath.c_str(), 1);
-
-            execvp("python3", c_args.data());
+            execvp(ego_convert_path.c_str(), c_args.data());
 
             // execvp only returns on error
-            fprintf(stderr, "Error: failed to exec python3: %s\n", strerror(errno));
+            fprintf(stderr, "Error: failed to exec ego-convert: %s\n", strerror(errno));
             return 1;
         }
     }
@@ -446,6 +462,10 @@ int main(int argc, char* argv[]) {
         ("queue-size",     "Bounded queue size (2-16)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
         ("warmup",         "Camera warmup frames to skip",
+         cxxopts::value<int>()->default_value("0"))  // 0 = use config value
+        ("width",          "Capture width  (default 1280, must be multiple of 8)",
+         cxxopts::value<int>()->default_value("0"))  // 0 = use config value
+        ("height",         "Capture height (default 720, must be multiple of 8)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
         ("h,help",         "Print usage");
 
@@ -495,6 +515,12 @@ int main(int argc, char* argv[]) {
     if (args.count("warmup") && args["warmup"].as<int>() != 0) {
         config.warmup_frames = args["warmup"].as<int>();
     }
+    if (args.count("width") && args["width"].as<int>() != 0) {
+        config.frame_width = args["width"].as<int>();
+    }
+    if (args.count("height") && args["height"].as<int>() != 0) {
+        config.frame_height = args["height"].as<int>();
+    }
 
     // Duration: CLI flag only (not in config struct)
     const int max_duration = args["duration"].as<int>();
@@ -506,6 +532,11 @@ int main(int argc, char* argv[]) {
     }
     if (config.queue_size < 2 || config.queue_size > 16) {
         fprintf(stderr, "Error: queue-size must be 2-16 (got %d)\n", config.queue_size);
+        return 1;
+    }
+    if (config.frame_width % 8 != 0 || config.frame_height % 8 != 0) {
+        fprintf(stderr, "Error: width (%d) and height (%d) must be multiples of 8\n",
+                config.frame_width, config.frame_height);
         return 1;
     }
 
@@ -530,7 +561,7 @@ int main(int argc, char* argv[]) {
             if (args.count("session-name") == 0 ||
                 args["session-name"].as<std::string>().empty()) {
                 headless_auto_session = true;
-                session_name = make_session_name();
+                session_name = make_session_name(config.output_dir);
             }
         }
         // Create date-based output directory: {output_dir}/{YYYY}/{MM}/{DD}/
@@ -581,7 +612,8 @@ int main(int argc, char* argv[]) {
             while (!shutdown_flag.load(std::memory_order_acquire)) {
                 try {
                     camera = std::make_unique<RealSensePipeline>();
-                    camera->configure_and_start(config.warmup_frames);
+                    camera->configure_and_start(config.frame_width, config.frame_height,
+                                            config.warmup_frames);
                     break;
                 } catch (const rs2::error&) {
                     camera.reset();
@@ -593,30 +625,33 @@ int main(int argc, char* argv[]) {
             if (shutdown_flag.load()) return 0;
         } else {
             camera = std::make_unique<RealSensePipeline>();
-            camera->configure_and_start(config.warmup_frames);
+            camera->configure_and_start(config.frame_width, config.frame_height,
+                                        config.warmup_frames);
         }
+
+        const int fw = config.frame_width;
+        const int fh = config.frame_height;
 
         fprintf(stderr, "Camera: %s (USB %s)\n",
                 camera->serial_number().c_str(),
                 camera->usb_type().c_str());
+        fprintf(stderr, "Resolution: %dx%d @ 30fps\n", fw, fh);
         fprintf(stderr, "IMU: %s\n",
                 camera->has_imu() ? "detected" : "not detected");
         fprintf(stderr, "Mode: %s\n",
                 config.headless ? "headless" : "GUI");
 
         // ---- Compression infrastructure ------------------------------------
-        ZdepthCompressor zdepth_comp(640, 480);
-        H264Encoder h264(640, 480, 30, config.h264_crf);
+        ZdepthCompressor zdepth_comp(fw, fh);
+        H264Encoder h264(fw, fh, 30, config.h264_crf);
 
         // ---- Helper lambdas ------------------------------------------------
 
         /// Open a new FileWriter and start the writer thread.
         ///
-        /// add_timestamp_suffix controls whether a second timestamp is appended
+        /// add_timestamp_suffix controls whether a timestamp is appended
         /// to the session name in the output filename. Set to false for headless
-        /// mode where the session name already contains a timestamp from
-        /// make_session_name(), to avoid double-timestamp filenames like
-        /// "capture_20260219_090520_20260219_090522.egorec".
+        /// mode where the session name is already unique (e.g. "pick_003").
         auto start_recording = [&](const std::string& sname, const std::string& out_dir,
                                    bool add_timestamp_suffix = true) {
             const std::string filepath = make_output_path(out_dir, sname, add_timestamp_suffix);
@@ -646,13 +681,13 @@ int main(int argc, char* argv[]) {
                     auto& frame = *maybe_frame;
 
                     // H.264 encode RGB (returns pointer to internal buffer)
-                    auto [h264_data, h264_size] = h264.encode(frame.rgb_data.data(), 640, 480);
+                    auto [h264_data, h264_size] = h264.encode(frame.rgb_data.data(), fw, fh);
 
                     // Zdepth compress depth -- keyframe every 30 frames (GOP=30)
                     bool keyframe = (frame.frame_number % 30 == 0);
                     auto [zdepth_data, zdepth_size] = zdepth_comp.compress(
                         reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
-                        640, 480, keyframe);
+                        fw, fh, keyframe);
 
                     std::vector<IMUSampleWire> imu_wire;
                     imu_wire.reserve(frame.imu_samples.size());
@@ -682,11 +717,14 @@ int main(int argc, char* argv[]) {
         };
 
         /// Stop recording: flush H.264, finalize file, join writer thread.
-        auto stop_recording = [&]() {
+        /// Stop recording. Returns true if a non-empty episode was saved,
+        /// false if recording was inactive or the episode had zero frames
+        /// (in which case the empty file is deleted).
+        auto stop_recording = [&]() -> bool {
             // Atomic exchange: only one caller proceeds, all others return.
             // Prevents TOCTOU race when watchdog (main thread) and
             // handle_disconnect (capture thread) both call stop_recording.
-            if (!recording_active.exchange(false)) return;
+            if (!recording_active.exchange(false)) return false;
             stats.recording_stopped();
 
             if (queue) {
@@ -695,6 +733,8 @@ int main(int argc, char* argv[]) {
             if (writer_thread.joinable()) {
                 writer_thread.join();
             }
+
+            bool has_frames = stats.captured() > 0;
 
             // Flush H.264 encoder AFTER writer thread exits (no more encode() calls)
             // but BEFORE finalize() (file still open for writing)
@@ -710,11 +750,16 @@ int main(int argc, char* argv[]) {
             }
             writer.reset();
 
-            // Auto-register episode in dataset manifest (no-op if no dataset.json)
-            if (!last_recording_path_.empty()) {
+            if (has_frames && !last_recording_path_.empty()) {
+                // Auto-register episode in dataset manifest (no-op if no dataset.json)
                 register_episode(config.output_dir, last_recording_path_);
-                last_recording_path_.clear();
+            } else if (!has_frames && !last_recording_path_.empty()) {
+                // Discard empty episode file (e.g., soft split when camera
+                // never came back). The file is tiny (header + footer only).
+                std::error_code ec;
+                std::filesystem::remove(last_recording_path_, ec);
             }
+            last_recording_path_.clear();
 
             // Reset H.264 encoder for potential next recording session
             h264.reset();
@@ -726,6 +771,7 @@ int main(int argc, char* argv[]) {
             }
 
             fprintf(stderr, "\n%s\n", stats.summary().c_str());
+            return has_frames;
         };
 
         // ---- Create presenter ----------------------------------------------
@@ -775,7 +821,8 @@ int main(int argc, char* argv[]) {
                 for (int attempt = 0; attempt < 30 && !shutdown_flag.load(); ++attempt) {
                     try {
                         camera = std::make_unique<RealSensePipeline>();
-                        camera->configure_and_start(config.warmup_frames);
+                        camera->configure_and_start(config.frame_width, config.frame_height,
+                                            config.warmup_frames);
                         reconnected = true;
                         break;
                     } catch (const rs2::error& e) {
@@ -845,7 +892,7 @@ int main(int argc, char* argv[]) {
             // Regenerate session name and output dir with fresh timestamps
             // (originals were set before camera wait + countdown delay).
             if (headless_auto_session) {
-                session_name = make_session_name();
+                session_name = make_session_name(config.output_dir);
             }
             output_dir = make_date_dir(config.output_dir);
             {
@@ -873,9 +920,12 @@ int main(int argc, char* argv[]) {
                     presenter->on_camera_disconnect();
                 }
                 if (recording_active.load(std::memory_order_acquire)) {
-                    stop_recording();
-                    std::thread([]{ play_speech("Episode saved"); }).detach();
-                    fprintf(stderr, "[headless] Episode saved.\n");
+                    if (stop_recording()) {
+                        std::thread([]{ play_speech("Episode saved"); }).detach();
+                        fprintf(stderr, "[headless] Episode saved.\n");
+                    } else {
+                        fprintf(stderr, "[headless] Empty episode discarded.\n");
+                    }
                 }
                 return false;  // exit capture loop; main thread reconnects
             } else {
@@ -948,7 +998,7 @@ int main(int argc, char* argv[]) {
                             gui->update_frame(
                                 frame.rgb_data.data(),
                                 reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
-                                640, 480,
+                                fw, fh,
                                 camera->depth_scale()
                             );
                         }
@@ -1005,6 +1055,32 @@ int main(int argc, char* argv[]) {
                     fflush(stderr);
                 }
 
+                // Soft episode split: if recording but no frames for >500ms
+                // (and <1s), the camera was briefly disconnected. Split into
+                // a new episode without tearing down the capture pipeline.
+                if (recording_active.load(std::memory_order_acquire)
+                    && !camera_disconnected.load(std::memory_order_acquire))
+                {
+                    int64_t last_ms = last_capture_ms.load(std::memory_order_acquire);
+                    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+                    if (last_ms > 0 && (now_ms - last_ms) > EPISODE_SPLIT_MS
+                        && (now_ms - last_ms) <= 1000
+                        && stats.captured() > 0)
+                    {
+                        fprintf(stderr, "\n[headless] Frame gap >%lldms -- soft episode split\n",
+                                (long long)EPISODE_SPLIT_MS);
+                        stop_recording();
+                        std::thread([]{ play_speech("Episode saved"); }).detach();
+
+                        session_name = make_session_name(config.output_dir);
+                        start_recording(session_name, output_dir,
+                                        /*add_timestamp_suffix=*/false);
+                        last_capture_ms.store(now_ms, std::memory_order_release);
+                    }
+                }
+
                 // Frame-stall watchdog: if recording but no frames for 1 second,
                 // camera is likely disconnected. Save episode immediately without
                 // waiting for librealsense's 15-second internal reconnect timeout.
@@ -1013,9 +1089,13 @@ int main(int argc, char* argv[]) {
                     int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now().time_since_epoch()).count();
                     if (last_ms > 0 && (now_ms - last_ms) > 1000) {
-                        fprintf(stderr, "\n[headless] No frames for 1s -- saving episode\n");
-                        stop_recording();
-                        std::thread([]{ play_speech("Episode saved"); }).detach();
+                        bool saved = stop_recording();
+                        if (saved) {
+                            fprintf(stderr, "\n[headless] No frames for 1s -- saving episode\n");
+                            std::thread([]{ play_speech("Episode saved"); }).detach();
+                        } else {
+                            fprintf(stderr, "\n[headless] No frames after split -- entering disconnect recovery\n");
+                        }
                         camera_disconnected.store(true, std::memory_order_release);
                         presenter->on_camera_disconnect();
                     }
@@ -1042,7 +1122,8 @@ int main(int argc, char* argv[]) {
                     // Try to create a new camera
                     try {
                         camera = std::make_unique<RealSensePipeline>();
-                        camera->configure_and_start(config.warmup_frames);
+                        camera->configure_and_start(config.frame_width, config.frame_height,
+                                            config.warmup_frames);
 
                         // Spawn new capture thread (old zombie exits on gen check)
                         int new_gen = capture_generation.fetch_add(1,
@@ -1055,7 +1136,7 @@ int main(int argc, char* argv[]) {
                         if (shutdown_flag.load()) continue;
 
                         presenter->on_camera_reconnect();
-                        session_name = make_session_name();
+                        session_name = make_session_name(config.output_dir);
                         output_dir = make_date_dir(config.output_dir);
                         {
                             std::error_code ec;

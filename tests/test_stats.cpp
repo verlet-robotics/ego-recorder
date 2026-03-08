@@ -71,21 +71,24 @@ TEST(Stats, RecordingElapsedTracksRecordingOnly) {
     EXPECT_NEAR(later, after, 0.005);
 }
 
-TEST(Stats, RecordingElapsedAccumulatesAcrossSessions) {
+TEST(Stats, RecordingElapsedResetsPerEpisode) {
     Stats stats;
 
     stats.recording_started();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     stats.recording_stopped();
     double first = stats.recording_elapsed_seconds();
+    EXPECT_GT(first, 0.03);
 
+    // Starting a new recording resets accumulated time
     stats.recording_started();
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     stats.recording_stopped();
     double second = stats.recording_elapsed_seconds();
 
-    EXPECT_GT(second, first);
-    EXPECT_GT(second, 0.08);
+    // Second session should have its own ~50ms, not accumulated ~100ms
+    EXPECT_GT(second, 0.03);
+    EXPECT_LT(second, 0.08);
 }
 
 TEST(Stats, CaptureFpsCalculation) {

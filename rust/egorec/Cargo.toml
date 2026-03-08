@@ -1,0 +1,10 @@
+[package]
+name = "egorec"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+zdepth-sys = { path = "../zdepth-sys" }
+ffmpeg-next = "7"
+byteorder = "1"
+thiserror = "2"

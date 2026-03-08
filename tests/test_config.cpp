@@ -34,6 +34,8 @@ TEST_F(ConfigTest, DefaultsWhenNoFile) {
     EXPECT_EQ(cfg.queue_size, 4);
     EXPECT_EQ(cfg.warmup_frames, 30);
     EXPECT_EQ(cfg.disk_min_mb, 500u);
+    EXPECT_EQ(cfg.frame_width, 1280);
+    EXPECT_EQ(cfg.frame_height, 720);
     EXPECT_FALSE(cfg.headless);
 }
 
@@ -47,6 +49,10 @@ session_name = "my_session"
 jpeg_quality = 80
 zstd_level = 5
 h264_crf = 28
+
+[camera]
+width = 1920
+height = 1080
 
 [recording]
 queue_size = 8
@@ -63,6 +69,8 @@ headless = true
     EXPECT_EQ(cfg.jpeg_quality, 80);
     EXPECT_EQ(cfg.zstd_level, 5);
     EXPECT_EQ(cfg.h264_crf, 28);
+    EXPECT_EQ(cfg.frame_width, 1920);
+    EXPECT_EQ(cfg.frame_height, 1080);
     EXPECT_EQ(cfg.queue_size, 8);
     EXPECT_EQ(cfg.warmup_frames, 60);
     EXPECT_EQ(cfg.disk_min_mb, 2000u);

@@ -42,7 +42,7 @@ public:
     /// Configure and start the RealSense pipeline.
     ///
     /// Sequence:
-    ///   1. Configure RGB (640x480 @ 30fps RGB8) and depth (640x480 @ 30fps Z16) streams
+    ///   1. Configure RGB and depth streams at the specified resolution @ 30fps
     ///   2. Attempt IMU streams (D435i) -- falls back gracefully if not available (D435)
     ///   3. Extract device info: serial number, USB type
     ///   4. Disable auto-exposure priority to maintain constant 30fps
@@ -52,8 +52,10 @@ public:
     ///   8. Drop first warmup_frames frames for auto-exposure stabilization
     ///   9. Initialize frame counter to 0
     ///
+    /// @param width          Frame width  (default: 1280, must be supported by D435/D435i)
+    /// @param height         Frame height (default: 720)
     /// @param warmup_frames  Number of frames to discard during warmup (default: 30)
-    void configure_and_start(int warmup_frames = 30);
+    void configure_and_start(int width = 1280, int height = 720, int warmup_frames = 30);
 
     /// Stop the pipeline and release the device.
     void stop();

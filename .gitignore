@@ -7,3 +7,7 @@ compile_commands.json
 *.egorec
 imgui.ini
 __pycache__/
+rust/target/
+datasets/
+recordings/
+test/

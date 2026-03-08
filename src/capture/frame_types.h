@@ -16,8 +16,8 @@ struct IMUSample {
 struct CapturedFrame {
     uint64_t              timestamp_us;   ///< Global time, microseconds
     uint64_t              frame_number;   ///< Sequential counter (0-based)
-    std::vector<uint8_t>  rgb_data;       ///< Raw RGB24 pixels: 640*480*3 = 921,600 bytes
-    std::vector<uint8_t>  depth_data;     ///< Raw Z16 pixels:  640*480*2 = 614,400 bytes
+    std::vector<uint8_t>  rgb_data;       ///< Raw RGB24 pixels (width * height * 3)
+    std::vector<uint8_t>  depth_data;     ///< Raw Z16 pixels  (width * height * 2)
     std::vector<IMUSample> imu_samples;   ///< IMU samples since last frame (empty if D435)
 
     // Move-only semantics

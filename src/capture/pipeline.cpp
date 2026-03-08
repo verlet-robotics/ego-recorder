@@ -4,14 +4,16 @@
 #include <optional>
 #include <stdexcept>
 
-void RealSensePipeline::configure_and_start(int warmup_frames)
+void RealSensePipeline::configure_and_start(int width, int height, int warmup_frames)
 {
     // -------------------------------------------------------------------------
-    // 1. Configure RGB and depth streams
+    // 1. Configure RGB and depth streams at requested resolution
     // -------------------------------------------------------------------------
     rs2::config cfg;
-    cfg.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
-    cfg.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16,  30);
+    cfg.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_RGB8, 30);
+    cfg.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  30);
+
+    fprintf(stderr, "Requesting %dx%d @ 30fps (RGB + depth)\n", width, height);
 
     // -------------------------------------------------------------------------
     // 2. Attempt IMU streams (D435i detection)
@@ -29,8 +31,8 @@ void RealSensePipeline::configure_and_start(int warmup_frames)
     } catch (const rs2::error&) {
         // IMU not available -- retry with RGB+depth only
         rs2::config cfg_no_imu;
-        cfg_no_imu.enable_stream(RS2_STREAM_COLOR, 640, 480, RS2_FORMAT_RGB8, 30);
-        cfg_no_imu.enable_stream(RS2_STREAM_DEPTH, 640, 480, RS2_FORMAT_Z16,  30);
+        cfg_no_imu.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_RGB8, 30);
+        cfg_no_imu.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  30);
         profile_ = pipe_.start(cfg_no_imu);
         has_imu_ = false;
         fprintf(stderr, "No IMU detected (D435 mode)\n");
@@ -57,7 +59,8 @@ void RealSensePipeline::configure_and_start(int warmup_frames)
     if (!usb_type_.empty() && usb_type_[0] == '2') {
         fprintf(stderr,
             "WARNING: USB 2.0 detected. Bandwidth may be insufficient for "
-            "640x480@30fps RGB+depth. Use a USB 3.0 port and cable.\n");
+            "%dx%d@30fps RGB+depth. Use a USB 3.0 port and cable.\n",
+            width, height);
     }
 
     // -------------------------------------------------------------------------

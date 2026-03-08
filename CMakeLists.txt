@@ -246,6 +246,23 @@ endif()
 
 install(TARGETS ego-recorder DESTINATION bin)
 
+# ---- Rust export tools ----
+option(WITH_RUST_EXPORT "Build Rust export tools (ego-convert)" ON)
+if(WITH_RUST_EXPORT)
+    add_custom_target(ego-convert ALL
+        COMMAND cargo build --release --manifest-path ${CMAKE_SOURCE_DIR}/rust/Cargo.toml
+        COMMENT "Building Rust export tools (ego-convert)")
+
+    # Install the Rust binary alongside ego-recorder
+    install(PROGRAMS ${CMAKE_SOURCE_DIR}/rust/target/release/ego-convert
+            DESTINATION bin
+            OPTIONAL)
+
+    message(STATUS "Rust export tools: enabled")
+else()
+    message(STATUS "Rust export tools: disabled (-DWITH_RUST_EXPORT=OFF)")
+endif()
+
 # ---- Tests ----
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)

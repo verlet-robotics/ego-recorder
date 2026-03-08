@@ -19,6 +19,10 @@ struct Config {
     int zstd_level   = 1;   ///< ZSTD compression level 1-22 (default 1, fastest)
     int h264_crf     = 23;  ///< H.264 CRF quality 0-51 (default 23)
 
+    // [camera]
+    int frame_width  = 1280;  ///< Capture resolution width  (must be multiple of 8)
+    int frame_height = 720;   ///< Capture resolution height (must be multiple of 8)
+
     // [recording]
     int      queue_size    = 4;    ///< Bounded capture queue depth (2-16)
     int      warmup_frames = 30;   ///< Camera warmup frames to skip before recording

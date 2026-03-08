@@ -1,0 +1,12 @@
+[package]
+name = "ego-convert"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+egorec = { path = "../egorec" }
+tfrecord = { path = "../tfrecord" }
+lerobot-writer = { path = "../lerobot-writer" }
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+anyhow = "1"

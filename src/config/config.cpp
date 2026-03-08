@@ -37,6 +37,10 @@ Config load_config(const std::string& path) {
     cfg.zstd_level   = tbl["compression"]["zstd_level"].value_or(cfg.zstd_level);
     cfg.h264_crf     = tbl["compression"]["h264_crf"].value_or(cfg.h264_crf);
 
+    // [camera]
+    cfg.frame_width  = tbl["camera"]["width"].value_or(cfg.frame_width);
+    cfg.frame_height = tbl["camera"]["height"].value_or(cfg.frame_height);
+
     // [recording]
     cfg.queue_size    = tbl["recording"]["queue_size"].value_or(cfg.queue_size);
     cfg.warmup_frames = tbl["recording"]["warmup_frames"].value_or(cfg.warmup_frames);
