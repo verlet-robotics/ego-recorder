@@ -29,17 +29,14 @@ dir = "/var/lib/ego-recorder/recordings"
 # ---------------------------------------------------------------------------
 [compression]
 
-# JPEG quality for RGB frames.
-# Range: 1 (worst quality, smallest files) to 100 (best quality, largest files)
-# Default: 90  -- good balance for ML training data
-# Tip: 80-85 saves ~15% space with minimal visual quality loss at 640x480
-jpeg_quality = 90
+# H.264 CRF (Constant Rate Factor) for RGB video encoding.
+# Range: 0 (lossless) to 51 (worst quality)
+# Default: 23  -- visually near-lossless, good for ML training data
+# Tip: 28-30 cuts file size roughly in half with some visible quality loss
+h264_crf = 23
 
-# ZSTD compression level for depth frames.
-# Range: 1 (fastest, ~3-4x compression) to 22 (slowest, best ratio)
-# Default: 1  -- fastest, <0.5ms/frame, adequate for real-time capture
-# Tip: level 3 adds ~1ms per frame but improves ratio to ~4-5x
-zstd_level = 1
+# Legacy settings (jpeg_quality, zstd_level) are ignored in v2 format.
+# Depth is always compressed with Zdepth (lossless).
 
 # ---------------------------------------------------------------------------
 # [recording] -- Capture pipeline settings

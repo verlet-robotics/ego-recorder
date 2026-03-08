@@ -128,13 +128,15 @@ private:
     ViewMode    view_mode_    = ViewMode::SIDE_BY_SIDE;
 
     // ---- Cached stats for overlay ----
-    uint64_t stat_captured_    = 0;
-    uint64_t stat_written_     = 0;
-    uint64_t stat_dropped_     = 0;
-    uint64_t stat_bytes_       = 0;
-    double   stat_capture_fps_ = 0.0;
-    double   stat_write_fps_   = 0.0;
-    double   stat_elapsed_     = 0.0;
+    uint64_t stat_captured_      = 0;
+    uint64_t stat_written_       = 0;
+    uint64_t stat_dropped_       = 0;
+    uint64_t stat_bytes_         = 0;
+    double   stat_capture_fps_   = 0.0;
+    double   stat_write_fps_     = 0.0;
+    double   stat_elapsed_       = 0.0;
+    double   stat_rec_elapsed_   = 0.0;
+    bool     stat_is_recording_  = false;
 };
 
 #endif // HAVE_GUI

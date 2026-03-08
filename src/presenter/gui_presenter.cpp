@@ -295,29 +295,41 @@ bool GuiPresenter::tick()
 
         ImGui::Begin("Stats", nullptr, overlay_flags);
 
-        // FPS
-        ImGui::Text("Cap FPS:  %.1f", stat_capture_fps_);
-        ImGui::Text("Write FPS: %.1f", stat_write_fps_);
+        // Camera section (always visible)
+        ImGui::Text("Camera FPS: %.1f", stat_capture_fps_);
         ImGui::Separator();
 
-        // Frame counts
-        ImGui::Text("Captured:  %llu", (unsigned long long)stat_captured_);
-        ImGui::Text("Written:   %llu", (unsigned long long)stat_written_);
-        ImGui::Text("Dropped:   %llu", (unsigned long long)stat_dropped_);
-        ImGui::Separator();
+        if (stat_is_recording_) {
+            // Active recording section
+            const int rec_s = static_cast<int>(stat_rec_elapsed_);
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                "REC %02d:%02d", rec_s / 60, rec_s % 60);
 
-        // Bytes written (formatted as MB/GB)
-        const double bytes_d = static_cast<double>(stat_bytes_);
-        if (bytes_d >= 1e9) {
-            ImGui::Text("Written:   %.2f GB", bytes_d / 1e9);
+            ImGui::Text("Frames:    %llu", (unsigned long long)stat_written_);
+            ImGui::Text("Dropped:   %llu", (unsigned long long)stat_dropped_);
+            ImGui::Text("Write FPS: %.1f", stat_write_fps_);
+
+            const double bytes_d = static_cast<double>(stat_bytes_);
+            if (bytes_d >= 1e9) {
+                ImGui::Text("File size: %.2f GB", bytes_d / 1e9);
+            } else {
+                ImGui::Text("File size: %.1f MB", bytes_d / 1e6);
+            }
+        } else if (stat_written_ > 0) {
+            // Idle with previous recording data
+            const int rec_s = static_cast<int>(stat_rec_elapsed_);
+            ImGui::Text("Last rec:  %llu frames", (unsigned long long)stat_written_);
+            ImGui::Text("Duration:  %02d:%02d", rec_s / 60, rec_s % 60);
+
+            const double bytes_d = static_cast<double>(stat_bytes_);
+            if (bytes_d >= 1e9) {
+                ImGui::Text("File size: %.2f GB", bytes_d / 1e9);
+            } else {
+                ImGui::Text("File size: %.1f MB", bytes_d / 1e6);
+            }
         } else {
-            ImGui::Text("Written:   %.1f MB", bytes_d / 1e6);
+            ImGui::Text("Ready to record");
         }
-        ImGui::Separator();
-
-        // Elapsed time
-        const int elapsed_s = static_cast<int>(stat_elapsed_);
-        ImGui::Text("Elapsed:   %02d:%02d", elapsed_s / 60, elapsed_s % 60);
 
         ImGui::End();
     }
@@ -423,13 +435,15 @@ void GuiPresenter::on_camera_reconnect()
 
 void GuiPresenter::update_stats(const Stats& stats)
 {
-    stat_captured_    = stats.captured();
-    stat_written_     = stats.written();
-    stat_dropped_     = stats.dropped();
-    stat_bytes_       = stats.total_bytes();
-    stat_capture_fps_ = stats.capture_fps();
-    stat_write_fps_   = stats.write_fps();
-    stat_elapsed_     = stats.elapsed_seconds();
+    stat_captured_      = stats.captured();
+    stat_written_       = stats.written();
+    stat_dropped_       = stats.dropped();
+    stat_bytes_         = stats.total_bytes();
+    stat_capture_fps_   = stats.capture_fps();
+    stat_write_fps_     = stats.write_fps();
+    stat_elapsed_       = stats.elapsed_seconds();
+    stat_rec_elapsed_   = stats.recording_elapsed_seconds();
+    stat_is_recording_  = stats.is_recording();
 }
 
 // ---------------------------------------------------------------------------

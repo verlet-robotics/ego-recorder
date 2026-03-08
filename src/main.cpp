@@ -539,6 +539,7 @@ int main(int argc, char* argv[]) {
             writer->write_header(header);
 
             recording_active.store(true, std::memory_order_release);
+            stats.recording_started();
 
             // Start writer thread
             writer_thread = std::thread([&]() {
@@ -589,6 +590,7 @@ int main(int argc, char* argv[]) {
             if (!recording_active.load()) return;
 
             recording_active.store(false, std::memory_order_release);
+            stats.recording_stopped();
 
             if (queue) {
                 queue->close();
