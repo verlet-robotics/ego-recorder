@@ -72,6 +72,10 @@
 | ZdepthCompressor in pybind11 module | unique_ptr member to defer init; source compiled directly into .so for symbol availability | 2026-03-08 |
 | H.264 decoder multi-frame queue | deque buffers decoded RGB frames from single-packet multi-output scenarios | 2026-03-08 |
 | Trailing flush recovery | Reader reads bytes between last indexed frame end and index_offset to recover H.264 flush NALs | 2026-03-08 |
+| RLDS builder pattern | TFDS GeneratorBasedBuilder subclass for standard TFRecord generation pipeline | 2026-03-08 |
+| RLDS depth encoding | Image(shape=(480,640,1), dtype=uint16, encoding_format='png') for lossless depth preservation | 2026-03-08 |
+| RLDS per-step intrinsics | Camera intrinsics/extrinsics as Tensor features in every step for RLDS convention compatibility | 2026-03-08 |
+| RLDS throughput tracking | tqdm set_postfix with MB/s for real-time progress monitoring | 2026-03-08 |
 | LeRobot API fallback | try root= then local_dir= for version compatibility | 2026-03-08 |
 | Depth export unit | float32 mm (exact D435 Z16 values), field named observation.depth_mm | 2026-03-08 |
 | RGB export dtype | video (LeRobot handles MP4 encoding internally, codec/CRF via LeRobot config) | 2026-03-08 |
@@ -104,6 +108,7 @@
 | 2026-03-08 | 03-01 | ~5 min | 3/3 | d1dcfa4, 0343e3a, 65dd038 |
 | 2026-03-08 | 03-02 | ~3 min | 2/2 | 977afe4, 2fa2dc3 |
 | 2026-03-08 | 03-03 | ~3 min | 2/2 | 901b25d, e05f5fc |
+| 2026-03-08 | 03-04 | ~1 min | 1/1 | 1df3420 |
 | 2026-03-08 | 03-05 | ~1 min | 1/1 | 9c1c90e |
 
 ---
