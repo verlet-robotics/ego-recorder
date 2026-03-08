@@ -108,7 +108,30 @@ FetchContent_MakeAvailable(pybind11)
 option(WITH_PYTHON "Build Python extension module" ON)
 if(WITH_PYTHON)
     find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+
+    # Build the egorec_reader Python extension module
+    # ZdepthCompressor is our RAII wrapper (not the zdepth library itself),
+    # so we compile its source directly into the extension module.
+    pybind11_add_module(egorec_reader
+        src/python/egorec_reader.cpp
+        src/compression/zdepth_compressor.cpp
+    )
+    target_include_directories(egorec_reader PRIVATE src)
+    target_link_libraries(egorec_reader PRIVATE
+        zdepth
+        PkgConfig::ZSTD
+        PkgConfig::AVCODEC
+        PkgConfig::AVUTIL
+        PkgConfig::SWSCALE
+    )
+
+    # Place the .so in the build directory root for easy PYTHONPATH=build/ usage
+    set_target_properties(egorec_reader PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+
     message(STATUS "Python support: enabled (${Python3_EXECUTABLE})")
+    message(STATUS "Python extension module: egorec_reader")
 else()
     message(STATUS "Python support: disabled (-DWITH_PYTHON=OFF)")
 endif()
