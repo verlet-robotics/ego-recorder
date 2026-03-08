@@ -18,8 +18,8 @@
 
 // ---- Magic constants -------------------------------------------------------
 
-/// 8-byte file magic: ASCII "EGOREC" + version 1.0
-static constexpr uint8_t FILE_MAGIC[8] = {'E','G','O','R','E','C', 0x01, 0x00};
+/// 8-byte file magic: ASCII "EGOREC" + version 2.0
+static constexpr uint8_t FILE_MAGIC[8] = {'E','G','O','R','E','C', 0x02, 0x00};
 
 /// Frame block boundary marker: 'FRME' (0x46524D45 as specified in format spec)
 static constexpr uint32_t FRAME_MAGIC = 0x46524D45u;
@@ -73,11 +73,14 @@ struct FileHeader {
     uint64_t start_timestamp_us;       ///< Unix epoch microseconds at recording start
     char     usb_type[8];              ///< USB type string, e.g. "USB 3.2"
 
-    // -- Compression settings ---
-    uint8_t  rgb_codec;    ///< 0=raw, 1=JPEG, 2=H264
-    uint8_t  depth_codec;  ///< 0=raw, 1=ZSTD, 2=Zdepth
-    uint8_t  rgb_quality;  ///< JPEG quality 0-100
-    uint8_t  zstd_level;   ///< ZSTD compression level
+    // -- Compression settings (extensible codec IDs) ---
+    // Codec IDs are extensible enum values. New codecs add new values
+    // without requiring a format version bump. Readers must check these
+    // fields per-stream rather than assuming a single global codec.
+    uint8_t  rgb_codec;    ///< RGB codec ID: 0=raw, 1=JPEG, 2=H264
+    uint8_t  depth_codec;  ///< Depth codec ID: 0=raw, 1=ZSTD, 2=Zdepth
+    uint8_t  rgb_quality;  ///< JPEG quality 0-100 (codec=1), or CRF (codec=2)
+    uint8_t  zstd_level;   ///< ZSTD compression level (codec=1), reserved (codec=2)
 
     // -- Future use ---
     uint8_t  reserved[128]; ///< Zero-filled, reserved for future fields

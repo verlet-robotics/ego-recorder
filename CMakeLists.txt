@@ -69,6 +69,50 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tomlplusplus)
 
+# Zdepth depth compressor via FetchContent
+# CRITICAL: Create a 'zstd' INTERFACE target BEFORE fetching Zdepth so that
+# Zdepth's CMakeLists.txt (which checks `if(NOT TARGET zstd)`) skips its
+# bundled zstd copy and uses our system libzstd instead. This prevents
+# duplicate symbol linker errors. We use INTERFACE (not ALIAS) because
+# Zdepth's CMake also does `export(TARGETS zdepth zstd ...)` which requires
+# a real (non-ALIAS) target.
+if(NOT TARGET zstd)
+    add_library(zstd INTERFACE)
+    target_link_libraries(zstd INTERFACE PkgConfig::ZSTD)
+endif()
+FetchContent_Declare(
+    zdepth
+    GIT_REPOSITORY https://github.com/catid/Zdepth.git
+    GIT_TAG        master
+)
+# Prevent Zdepth's install(EXPORT) from failing because our 'zstd' interface
+# target is not in its export set. We add our zstd target to the export set
+# that Zdepth's CMake expects (it does `install(EXPORT zdepth ...)`).
+install(TARGETS zstd EXPORT zdepth)
+FetchContent_MakeAvailable(zdepth)
+
+# FFmpeg via pkg-config (for H.264 encoding)
+pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
+pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
+pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
+
+# pybind11 via FetchContent (for Python extension module in later plans)
+FetchContent_Declare(
+    pybind11
+    GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    GIT_TAG        v2.13.6
+)
+FetchContent_MakeAvailable(pybind11)
+
+# Optional Python extension module
+option(WITH_PYTHON "Build Python extension module" ON)
+if(WITH_PYTHON)
+    find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+    message(STATUS "Python support: enabled (${Python3_EXECUTABLE})")
+else()
+    message(STATUS "Python support: disabled (-DWITH_PYTHON=OFF)")
+endif()
+
 # Optional systemd support
 option(WITH_SYSTEMD "Enable systemd sd_notify watchdog support" ON)
 if(WITH_SYSTEMD)
@@ -126,6 +170,8 @@ add_executable(ego-recorder
     src/capture/pipeline.cpp
     src/compression/jpeg_compressor.cpp
     src/compression/zstd_compressor.cpp
+    src/compression/zdepth_compressor.cpp
+    src/compression/h264_encoder.cpp
     src/storage/file_writer.cpp
     src/utils/signal_handler.cpp
     src/utils/stats.cpp
@@ -144,6 +190,10 @@ target_link_libraries(ego-recorder PRIVATE
     realsense2::realsense2
     PkgConfig::TURBOJPEG
     PkgConfig::ZSTD
+    zdepth
+    PkgConfig::AVCODEC
+    PkgConfig::AVUTIL
+    PkgConfig::SWSCALE
     cxxopts::cxxopts
     tomlplusplus::tomlplusplus
     pthread
