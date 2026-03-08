@@ -90,6 +90,8 @@ TEST(Stats, RecordingElapsedAccumulatesAcrossSessions) {
 
 TEST(Stats, CaptureFpsCalculation) {
     Stats stats;
+    // Sleep briefly so elapsed_seconds() exceeds the 1µs guard clause
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
     for (int i = 0; i < 100; i++) {
         stats.frame_captured();
     }

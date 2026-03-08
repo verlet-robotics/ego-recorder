@@ -209,6 +209,8 @@ install_system_deps() {
         g++
         pkg-config
         git
+        curl
+        ca-certificates
 
         # Compression libraries
         libzstd-dev
@@ -305,17 +307,32 @@ install_python_export() {
     local pip_cmd="pip3"
     command -v pip3 &>/dev/null || pip_cmd="pip"
 
+    # Use --user only if we're NOT inside a virtualenv.
+    # Check VIRTUAL_ENV/CONDA_PREFIX env vars AND ask Python directly
+    # (handles venvs activated without sourcing activate).
+    local in_venv=false
+    if [[ -n "${VIRTUAL_ENV:-}" || -n "${CONDA_PREFIX:-}" ]]; then
+        in_venv=true
+    elif python3 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)" 2>/dev/null; then
+        in_venv=true
+    fi
+
+    local pip_flags=()
+    if [[ "$in_venv" == false ]]; then
+        pip_flags+=(--user)
+    fi
+
     # RLDS export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-rlds.txt" ]]; then
         info "Installing RLDS export dependencies..."
-        $pip_cmd install --user -r "${PROJECT_DIR}/python/requirements-rlds.txt"
+        $pip_cmd install "${pip_flags[@]}" -r "${PROJECT_DIR}/python/requirements-rlds.txt"
         ok "RLDS export dependencies installed"
     fi
 
     # LeRobot export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-lerobot.txt" ]]; then
         info "Installing LeRobot export dependencies..."
-        $pip_cmd install --user -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
+        $pip_cmd install "${pip_flags[@]}" -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
         ok "LeRobot export dependencies installed"
     fi
 }
@@ -331,9 +348,9 @@ deploy_systemd() {
     info "Running systemd deployment..."
     if [[ "$(id -u)" -ne 0 ]]; then
         info "Systemd deployment requires root -- invoking with sudo..."
-        sudo "${PROJECT_DIR}/deploy/install.sh"
+        sudo bash "${PROJECT_DIR}/deploy/install.sh"
     else
-        "${PROJECT_DIR}/deploy/install.sh"
+        bash "${PROJECT_DIR}/deploy/install.sh"
     fi
 }
 
@@ -349,8 +366,8 @@ main() {
 
     cd "$PROJECT_DIR"
 
-    install_realsense_sdk
     install_system_deps
+    install_realsense_sdk
     build_project
     run_tests
     install_python_export

@@ -254,13 +254,17 @@ TEST_F(H264EncoderTest, EncodeProducesOutput) {
 TEST_F(H264EncoderTest, FlushDrainsBufferedFrames) {
     H264Encoder enc(W, H, 30, 23);
 
+    size_t encode_bytes = 0;
     for (int i = 0; i < 5; i++) {
-        enc.encode(rgb.data(), W, H);
+        auto [data, size] = enc.encode(rgb.data(), W, H);
+        encode_bytes += size;
     }
 
     auto [fdata, fsize] = enc.flush();
-    // Flush should produce at least some data
-    EXPECT_GT(fsize, 0u);
+    // With zerolatency tune, encode() outputs immediately so flush() may
+    // return 0.  The important thing is that total output is non-zero and
+    // flush does not error.
+    EXPECT_GT(encode_bytes + fsize, 0u);
 }
 
 TEST_F(H264EncoderTest, ResetAllowsNewSession) {

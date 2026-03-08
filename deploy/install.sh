@@ -98,8 +98,7 @@ fi
 echo "[install] Installing systemd unit file..."
 install -m 644 "${SCRIPT_DIR}/ego-recorder.service" "${SYSTEMD_DIR}/ego-recorder.service"
 systemctl daemon-reload
-systemctl enable ego-recorder.service
-echo "[install]   Service enabled. Start with: systemctl start ego-recorder.service"
+echo "[install]   Service installed. Enable with: systemctl enable --now ego-recorder.service"
 
 # ---------------------------------------------------------------------------
 # 6. Install udev rules (disable USB autosuspend for RealSense cameras)
@@ -116,10 +115,7 @@ echo "[install]   udev rules installed and reloaded."
 echo "[install] Installing logind.conf drop-in (fallback lid-close prevention)..."
 mkdir -p "${LOGIND_DIR}"
 install -m 644 "${SCRIPT_DIR}/50-ego-recorder-lid.conf" "${LOGIND_DIR}/50-ego-recorder-lid.conf"
-# Restart logind to apply the new drop-in.
-# Note: This is safe -- logind restart does not affect active sessions.
-systemctl restart systemd-logind
-echo "[install]   logind drop-in installed."
+echo "[install]   logind drop-in installed (takes effect on next reboot or: systemctl restart systemd-logind)"
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -139,7 +135,7 @@ echo " Next steps:"
 echo "   1. Edit ${CONF_DIR}/config.toml (set output.dir to your recording path)"
 echo "   2. Ensure the output directory exists and is writable"
 echo "   3. Plug in the RealSense camera"
-echo "   4. Start the service: systemctl start ego-recorder.service"
+echo "   4. Enable and start:  systemctl enable --now ego-recorder.service"
 echo "   5. Check status:      systemctl status ego-recorder.service"
 echo "   6. Follow logs:       journalctl -fu ego-recorder.service"
 echo ""
