@@ -1,10 +1,10 @@
 # ego-recorder
 
-Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to `.egorec` files. Optimized for ML training data collection with ~13-19x compression over raw frames.
+Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to `.egorec` files. Optimized for ML training data collection at 1280x720 30fps.
 
 ## Features
 
-- **30fps synchronized RGB + depth** at 640x480
+- **30fps synchronized RGB + depth** at 1280x720
 - **H.264 RGB + Zdepth lossless depth** compression (~13-19x vs raw)
 - **GUI mode** with live preview, recording controls, and stats overlay
 - **Headless mode** for unattended recording via systemd
@@ -14,14 +14,15 @@ Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to
 
 ## Quick start
 
-### One-line setup
-
 ```bash
-./setup.sh             # full install (deps + build + Python export tools)
-./setup.sh --headless  # headless only (no GUI, no Python)
+./scripts/setup.sh             # install deps, build, install binary
+./scripts/setup-recordings.sh  # create recording directory + dataset
+./scripts/record.sh            # choose dataset, mode, start recording
 ```
 
-The setup script installs all system dependencies (including the Intel RealSense SDK), builds the project, and installs Python export tools. Run `./setup.sh --help` for all options or `./setup.sh --interactive` to choose components individually.
+For headless-only machines (no display): `./scripts/setup.sh --headless`
+
+Run `./scripts/setup.sh --help` for all options or `./scripts/setup.sh --interactive` to choose components individually.
 
 ### Manual setup
 
@@ -72,32 +73,28 @@ Build options:
 - `-DWITH_PYTHON=OFF` -- skip Python extension module (no pybind11)
 - `-DBUILD_TESTS=OFF` -- skip unit tests
 
-#### Python export dependencies
-
-```bash
-pip install tensorflow-datasets numpy tqdm   # for RLDS export
-pip install lerobot numpy tqdm               # for LeRobot export
-```
-
 </details>
 
-### Record (GUI)
+### Record
 
 ```bash
-./build/ego-recorder -s my_session -o ./recordings
+./scripts/record.sh            # interactive: pick dataset, mode, go
+./scripts/record.sh pick       # pre-select dataset
 ```
 
-- **Space** -- start/stop recording
-- **Escape** -- stop recording (if active) or quit
-- **V** -- cycle view: RGB only / depth only / side-by-side
-
-### Record (headless)
+Or run directly:
 
 ```bash
-./build/ego-recorder --headless -o ./recordings -d 300
+# GUI mode
+ego-recorder -o /var/lib/ego-recorder/pick
+
+# Headless mode
+ego-recorder --headless -o /var/lib/ego-recorder/pick -d 300
 ```
 
-Records for 300 seconds (omit `-d` for unlimited). Session name is auto-generated from timestamp.
+Episodes are auto-named `pick_000.egorec`, `pick_001.egorec`, etc. Use `-s name` to override.
+
+GUI controls: **Space** start/stop, **Escape** quit, **V** cycle view.
 
 ### Inspect a recording
 
@@ -107,31 +104,18 @@ Records for 300 seconds (omit `-d` for unlimited). Session name is auto-generate
 
 Shows format version, codecs, frame count, duration, resolution, and camera intrinsics.
 
-### Export to RLDS (TFRecord)
+### Export
 
 ```bash
-./build/ego-recorder export rlds recording.egorec -o ./rlds_output
+# RLDS (TFRecord)
+ego-recorder export rlds recording.egorec -o ./rlds_output
+
+# LeRobot v3
+ego-recorder export lerobot recording.egorec -o ./lerobot_output
+
+# Export entire dataset (preserves manifest metadata)
+ego-recorder export rlds /var/lib/ego-recorder/pick -o ./rlds_output
 ```
-
-Or call the Python script directly:
-```bash
-python python/export_rlds.py recording.egorec -o ./rlds_output
-```
-
-Options: `--quiet` to suppress progress bar. Accepts multiple files for batch export.
-
-### Export to LeRobot v3
-
-```bash
-./build/ego-recorder export lerobot recording.egorec -o ./lerobot_output
-```
-
-Or call the Python script directly:
-```bash
-python python/export_lerobot.py recording.egorec -o ./lerobot_output
-```
-
-Options: `--separate` to create one dataset per file (default merges all into one). `--quiet` to suppress progress bar.
 
 ## Dataset management
 
@@ -157,14 +141,11 @@ Creates a `dataset.json` manifest in the directory. Use `--force` to overwrite a
 
 ### Record into a dataset
 
-Record directly into the dataset directory -- episodes are auto-registered into the manifest when recording stops:
+Record directly into the dataset directory -- episodes are auto-indexed and auto-registered:
 
 ```bash
-# GUI mode
-./build/ego-recorder -o ./my_dataset -s pick_001
-
-# Headless mode
-./build/ego-recorder --headless -o ./my_dataset -d 30
+ego-recorder --headless -o ./my_dataset -d 30
+# creates my_dataset/2026/03/09/my_dataset_000.egorec
 ```
 
 Each episode's metadata (session name, timestamp, duration, frame count) is automatically extracted from the `.egorec` file header and footer.
@@ -218,8 +199,8 @@ The `dataset.json` manifest:
   "created": "2026-03-08T12:00:00Z",
   "episodes": [
     {
-      "filename": "pick_001_20260308_120000.egorec",
-      "session_name": "pick_001",
+      "filename": "2026/03/09/kitchen-pick_000.egorec",
+      "session_name": "kitchen-pick_000",
       "recorded_at": "2026-03-08T12:00:00Z",
       "duration_s": 30.5,
       "frames": 915
@@ -236,7 +217,7 @@ Pass `--config path/to/config.toml` or use CLI flags. CLI flags override config 
 |---------|----------|---------|-------------|
 | H.264 CRF | `--crf 23` | 23 | Video quality (0=lossless, 51=worst). 28-30 for smaller files |
 | Output dir | `-o ./dir` | `.` | Where .egorec files are saved |
-| Session name | `-s name` | `capture` | Filename prefix (headless auto-generates from timestamp) |
+| Session name | `-s name` | auto | Filename (headless auto-generates as `{dataset}_{NNN}`) |
 | Duration | `-d 300` | unlimited | Max recording seconds |
 | Queue size | `--queue-size 4` | 4 | Writer queue depth (2-16) |
 | Warmup | `--warmup 30` | 30 | Frames to skip for auto-exposure |
@@ -257,16 +238,27 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for the full production setup guide covering 
 
 Depth compression is **lossless** (bit-exact round-trip). RGB uses H.264 CRF encoding (lossy, visually near-lossless at CRF 23).
 
-## Compression tuning
+## Disk usage
 
-| CRF | Approx ratio | Quality | Use case |
-|-----|-------------|---------|----------|
-| 18 | ~10x | Visually lossless | Archival |
-| 23 | ~13-15x | Near-lossless | ML training (default) |
-| 28 | ~20-25x | Good | Storage-constrained |
-| 33 | ~30-40x | Acceptable | Quick previews |
+At default settings (1280x720, CRF 23):
 
-Depth (Zdepth) is always lossless at ~8-10:1. These ratios are combined RGB+depth.
+| Duration | Size |
+|----------|------|
+| 1 minute | ~435 MB |
+| 1 hour | ~26 GB |
+| 8 hours | ~208 GB |
+
+Recording stops automatically when free space drops below `disk_min_mb` (default: 1000 MB).
+
+### CRF tuning
+
+| CRF | Quality | Use case |
+|-----|---------|----------|
+| 18 | Visually lossless | Archival |
+| 23 | Near-lossless | ML training (default) |
+| 28 | Good | Storage-constrained |
+
+Depth (Zdepth) is always lossless.
 
 ## License
 

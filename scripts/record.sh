@@ -9,6 +9,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BASE_DIR="/var/lib/ego-recorder"
 EGO_RECORDER="ego-recorder"
 
@@ -19,6 +21,25 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 DIM='\033[2m'
 NC='\033[0m'
+
+# ---------------------------------------------------------------------------
+# 0. Ensure binary is built and up to date
+# ---------------------------------------------------------------------------
+BUILT="${PROJECT_DIR}/build/ego-recorder"
+INSTALLED="$(command -v "$EGO_RECORDER" 2>/dev/null || true)"
+
+if [[ ! -f "$BUILT" ]]; then
+    echo -e "${YELLOW}Binary not found -- building...${NC}"
+    "${SCRIPT_DIR}/build.sh"
+elif [[ -n "$INSTALLED" && "$BUILT" -nt "$INSTALLED" ]]; then
+    echo -e "${YELLOW}Installed binary is outdated -- rebuilding...${NC}"
+    "${SCRIPT_DIR}/build.sh"
+fi
+
+# Prefer installed binary, fall back to build dir
+if ! command -v "$EGO_RECORDER" &>/dev/null; then
+    EGO_RECORDER="$BUILT"
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Choose dataset

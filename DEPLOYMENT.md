@@ -41,7 +41,7 @@ This prompts you to pick a dataset (or create a new one), choose headless or GUI
 - Ubuntu 22.04 or 24.04
 - Intel RealSense D435 or D435i
 - USB 3.0 port (USB 2.0 cannot sustain 30fps)
-- ~150 MB/minute of storage at default settings
+- ~435 MB/minute of storage at default settings (720p)
 
 ### Verify the camera
 
@@ -97,9 +97,9 @@ ego-recorder export lerobot /var/lib/ego-recorder/pick -o ./lerobot_output
 
 | Duration | Size |
 |----------|------|
-| 1 minute | ~150 MB |
-| 1 hour | ~9 GB |
-| 8 hours | ~72 GB |
+| 1 minute | ~435 MB |
+| 1 hour | ~26 GB |
+| 8 hours | ~208 GB |
 
 Recording stops automatically when free space drops below `disk_min_mb` (default: 1000 MB).
 
