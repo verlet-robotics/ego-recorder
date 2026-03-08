@@ -17,6 +17,7 @@ struct Config {
     // [compression]
     int jpeg_quality = 90;  ///< JPEG quality 1-100 (default 90)
     int zstd_level   = 1;   ///< ZSTD compression level 1-22 (default 1, fastest)
+    int h264_crf     = 23;  ///< H.264 CRF quality 0-51 (default 23)
 
     // [recording]
     int      queue_size    = 4;    ///< Bounded capture queue depth (2-16)

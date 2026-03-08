@@ -108,6 +108,20 @@ void FileWriter::write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
 }
 
 // ---------------------------------------------------------------------------
+// write_trailing_codec_data
+// ---------------------------------------------------------------------------
+
+void FileWriter::write_trailing_codec_data(const uint8_t* data, size_t size) {
+    if (finalized_) {
+        std::fprintf(stderr, "FileWriter: write_trailing_codec_data called after finalize -- ignored\n");
+        return;
+    }
+    if (size > 0 && data != nullptr) {
+        raw_write(data, size);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // finalize
 // ---------------------------------------------------------------------------
 

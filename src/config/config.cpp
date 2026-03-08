@@ -35,6 +35,7 @@ Config load_config(const std::string& path) {
     // [compression]
     cfg.jpeg_quality = tbl["compression"]["jpeg_quality"].value_or(cfg.jpeg_quality);
     cfg.zstd_level   = tbl["compression"]["zstd_level"].value_or(cfg.zstd_level);
+    cfg.h264_crf     = tbl["compression"]["h264_crf"].value_or(cfg.h264_crf);
 
     // [recording]
     cfg.queue_size    = tbl["recording"]["queue_size"].value_or(cfg.queue_size);

@@ -50,6 +50,13 @@ public:
                      uint64_t frame_number,
                      const std::vector<IMUSampleWire>& imu_samples);
 
+    /// Write raw codec flush data (e.g., H.264 trailing NAL units) after the
+    /// last frame block. Does NOT create a FrameBlockHeader or IndexEntry.
+    /// Must be called after the last write_frame() and before finalize().
+    /// The reader must read bytes between the last indexed frame's end and
+    /// index_offset to recover trailing codec data.
+    void write_trailing_codec_data(const uint8_t* data, size_t size);
+
     /// Finalize the file: write index table + footer, flush, close.
     /// Safe to call multiple times (no-op after first call).
     void finalize();

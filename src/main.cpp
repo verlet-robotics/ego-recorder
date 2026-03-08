@@ -16,7 +16,7 @@
 // Three-thread pipeline (both modes):
 //   - Capture thread: polls camera at 30fps, enqueues CapturedFrames.
 //     In GUI mode, also updates the GuiPresenter frame buffer for live preview.
-//   - Writer thread:  dequeues frames, compresses (JPEG + ZSTD), writes to .egorec.
+//   - Writer thread:  dequeues frames, compresses (H.264 + Zdepth), writes to .egorec.
 //     Only runs when recording is active.
 //   - Main thread:    presenter tick loop (ImGui render or headless watchdog),
 //     stats reporting, disconnect/reconnect recovery.
@@ -42,6 +42,8 @@
 #include "threading/bounded_queue.h"
 #include "compression/jpeg_compressor.h"
 #include "compression/zstd_compressor.h"
+#include "compression/zdepth_compressor.h"
+#include "compression/h264_encoder.h"
 #include "storage/binary_format.h"
 #include "storage/file_writer.h"
 #include "utils/signal_handler.h"
@@ -56,15 +58,20 @@
 #include "presenter/headless_presenter.h"
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cinttypes>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -141,8 +148,7 @@ static uint64_t now_us() {
 /// The header is fully populated -- caller just needs to call write_header().
 static FileHeader make_file_header(const RealSensePipeline& camera,
                                    const std::string& session_name,
-                                   int jpeg_quality,
-                                   int zstd_level) {
+                                   int crf) {
     FileHeader header;
     std::memset(&header, 0, sizeof(header));
     std::memcpy(header.magic, FILE_MAGIC, sizeof(FILE_MAGIC));
@@ -200,10 +206,10 @@ static FileHeader make_file_header(const RealSensePipeline& camera,
                  sizeof(header.session_name) - 1);
     header.start_timestamp_us = now_us();
 
-    header.rgb_codec   = 1;  // JPEG
-    header.depth_codec = 1;  // ZSTD
-    header.rgb_quality = static_cast<uint8_t>(jpeg_quality);
-    header.zstd_level  = static_cast<uint8_t>(zstd_level);
+    header.rgb_codec   = 2;  // H264
+    header.depth_codec = 2;  // Zdepth
+    header.rgb_quality = static_cast<uint8_t>(crf);
+    header.zstd_level  = 0;  // reserved for Zdepth
 
     return header;
 }
@@ -226,9 +232,7 @@ int main(int argc, char* argv[]) {
          cxxopts::value<std::string>()->default_value(""))
         ("d,duration",     "Max recording duration in seconds (0 = unlimited)",
          cxxopts::value<int>()->default_value("0"))
-        ("q,quality",      "JPEG quality 1-100",
-         cxxopts::value<int>()->default_value("0"))  // 0 = use config value
-        ("z,zstd-level",   "ZSTD compression level 1-22",
+        ("crf",            "H.264 CRF quality 0-51 (default 23)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
         ("queue-size",     "Bounded queue size (2-16)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
@@ -273,11 +277,8 @@ int main(int argc, char* argv[]) {
     if (args.count("duration")) {
         // duration is not in Config struct -- handled separately
     }
-    if (args.count("quality") && args["quality"].as<int>() != 0) {
-        config.jpeg_quality = args["quality"].as<int>();
-    }
-    if (args.count("zstd-level") && args["zstd-level"].as<int>() != 0) {
-        config.zstd_level = args["zstd-level"].as<int>();
+    if (args.count("crf") && args["crf"].as<int>() != 0) {
+        config.h264_crf = args["crf"].as<int>();
     }
     if (args.count("queue-size") && args["queue-size"].as<int>() != 0) {
         config.queue_size = args["queue-size"].as<int>();
@@ -290,12 +291,8 @@ int main(int argc, char* argv[]) {
     const int max_duration = args["duration"].as<int>();
 
     // Validate ranges (post-merge)
-    if (config.jpeg_quality < 1 || config.jpeg_quality > 100) {
-        fprintf(stderr, "Error: JPEG quality must be 1-100 (got %d)\n", config.jpeg_quality);
-        return 1;
-    }
-    if (config.zstd_level < 1 || config.zstd_level > 22) {
-        fprintf(stderr, "Error: ZSTD level must be 1-22 (got %d)\n", config.zstd_level);
+    if (config.h264_crf < 0 || config.h264_crf > 51) {
+        fprintf(stderr, "Error: CRF must be 0-51 (got %d)\n", config.h264_crf);
         return 1;
     }
     if (config.queue_size < 2 || config.queue_size > 16) {
@@ -367,9 +364,9 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Mode: %s\n",
                 config.headless ? "headless" : "GUI");
 
-        // ---- Thread infrastructure -----------------------------------------
-        JpegCompressor jpeg(640, 480, config.jpeg_quality);
-        ZstdCompressor zstd(640 * 480 * 2, config.zstd_level);
+        // ---- Compression infrastructure ------------------------------------
+        ZdepthCompressor zdepth_comp(640, 480);
+        H264Encoder h264(640, 480, 30, config.h264_crf);
 
         // ---- Helper lambdas ------------------------------------------------
 
@@ -392,8 +389,7 @@ int main(int argc, char* argv[]) {
 
             // Assemble and write FileHeader
             FileHeader header = make_file_header(*camera, sname,
-                                                 config.jpeg_quality,
-                                                 config.zstd_level);
+                                                 config.h264_crf);
             writer->write_header(header);
 
             recording_active.store(true, std::memory_order_release);
@@ -406,10 +402,14 @@ int main(int argc, char* argv[]) {
 
                     auto& frame = *maybe_frame;
 
-                    auto [jpeg_data, jpeg_size] = jpeg.compress(
-                        frame.rgb_data.data(), 640, 480);
-                    auto [zstd_data, zstd_size] = zstd.compress(
-                        frame.depth_data.data(), frame.depth_data.size());
+                    // H.264 encode RGB
+                    auto h264_data = h264.encode(frame.rgb_data.data(), 640, 480);
+
+                    // Zdepth compress depth -- keyframe every 30 frames (GOP=30)
+                    bool keyframe = (frame.frame_number % 30 == 0);
+                    auto [zdepth_data, zdepth_size] = zdepth_comp.compress(
+                        reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
+                        640, 480, keyframe);
 
                     std::vector<IMUSampleWire> imu_wire;
                     imu_wire.reserve(frame.imu_samples.size());
@@ -426,19 +426,19 @@ int main(int argc, char* argv[]) {
                     }
 
                     writer->write_frame(
-                        jpeg_data, jpeg_size,
-                        zstd_data, zstd_size,
+                        h264_data.data(), h264_data.size(),
+                        zdepth_data, zdepth_size,
                         frame.timestamp_us,
                         frame.frame_number,
                         imu_wire);
 
                     stats.frame_written();
-                    stats.bytes_written(jpeg_size + zstd_size);
+                    stats.bytes_written(h264_data.size() + zdepth_size);
                 }
             });
         };
 
-        /// Stop recording: finalize file, join writer thread.
+        /// Stop recording: flush H.264, finalize file, join writer thread.
         auto stop_recording = [&]() {
             if (!recording_active.load()) return;
 
@@ -450,10 +450,23 @@ int main(int argc, char* argv[]) {
             if (writer_thread.joinable()) {
                 writer_thread.join();
             }
+
+            // Flush H.264 encoder AFTER writer thread exits (no more encode() calls)
+            // but BEFORE finalize() (file still open for writing)
             if (writer && !writer->is_finalized()) {
+                auto flush_data = h264.flush();
+                if (!flush_data.empty()) {
+                    // Write trailing H.264 NAL units without creating an IndexEntry.
+                    // The reader recovers these by reading bytes between the last
+                    // indexed frame block's end and footer.index_offset.
+                    writer->write_trailing_codec_data(flush_data.data(), flush_data.size());
+                }
                 writer->finalize();
             }
             writer.reset();
+
+            // Reset H.264 encoder for potential next recording session
+            h264.reset();
 
             // Update dropped count
             if (queue) {
