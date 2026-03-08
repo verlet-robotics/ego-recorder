@@ -112,6 +112,15 @@ Plans:
 
 **Estimated compression:** ~140-190 MB/min (14-19x vs raw, ~10x smaller than ROS bags)
 
+**Plans:** 5 plans
+
+Plans:
+- [x] 03-01-PLAN.md -- Container format v2, Zdepth compressor, H.264 encoder, CMake deps
+- [ ] 03-02-PLAN.md -- Wire Zdepth+H.264 into recording pipeline, info subcommand
+- [ ] 03-03-PLAN.md -- Python reader module (pybind11 egorec_reader extension)
+- [ ] 03-04-PLAN.md -- RLDS TFRecord export tool
+- [ ] 03-05-PLAN.md -- LeRobot v3 export tool
+
 **Success criteria:**
 - [ ] 1-hour recording fits in ~8-12 GB (vs 162 GB raw)
 - [ ] Depth compression maintains bit-exact lossless (verified round-trip test)
