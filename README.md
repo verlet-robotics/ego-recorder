@@ -14,25 +14,61 @@ Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to
 
 ## Quick start
 
-### Dependencies
+### One-line setup
 
 ```bash
-# Ubuntu 24.04
-sudo apt install librealsense2-dev libzstd-dev libturbojpeg0-dev \
-    libglfw3-dev libavcodec-dev libavutil-dev libswscale-dev \
-    python3-dev pkg-config cmake g++
+./setup.sh          # interactive -- prompts for build options
+./setup.sh --all    # full build (GUI + Python + tests)
+./setup.sh --headless  # headless only (no GUI)
 ```
 
-### Build
+The setup script installs all system dependencies (including the Intel RealSense SDK), builds the project, and optionally installs Python export tools and the systemd service. Run `./setup.sh --help` for all options.
+
+### Manual setup
+
+#### Dependencies
 
 ```bash
-cmake -B build -DCMAKE_PREFIX_PATH="/opt/ros/jazzy"
+# Ubuntu 22.04 / 24.04
+sudo apt install cmake g++ pkg-config git \
+    libzstd-dev libturbojpeg0-dev \
+    libavcodec-dev libavutil-dev libswscale-dev \
+    libglfw3-dev libopengl-dev \
+    python3-dev libsystemd-dev
+```
+
+Intel RealSense SDK -- install via **one** of:
+
+```bash
+# Option A: Intel apt repo (standalone)
+sudo mkdir -p /etc/apt/keyrings
+curl -sSf https://librealsense.intel.com/Debian/librealsense.pgp \
+    | sudo tee /etc/apt/keyrings/librealsense.pgp > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/librealsense.pgp] \
+    https://librealsense.intel.com/Debian/apt-repo $(lsb_release -cs) main" \
+    | sudo tee /etc/apt/sources.list.d/librealsense.list
+sudo apt update && sudo apt install librealsense2-dev librealsense2-utils
+
+# Option B: ROS 2 Jazzy (if you already have ROS 2 installed)
+sudo apt install ros-jazzy-librealsense2
+```
+
+#### Build
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
+```
+
+If using ROS 2 Jazzy for librealsense2, add the prefix path:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="/opt/ros/jazzy"
 ```
 
 Build options:
 - `-DWITH_GUI=OFF` -- headless only (no ImGui/GLFW/OpenGL dependency)
 - `-DWITH_PYTHON=OFF` -- skip Python extension module (no pybind11)
+- `-DBUILD_TESTS=OFF` -- skip unit tests
 
 ### Record (GUI)
 
