@@ -1,9 +1,9 @@
 # Project State: RealSense Ego Recorder
 
-**Last updated:** 2026-02-19
-**Current phase:** 02-gui-mode-headless-systemd-service
-**Current plan:** 4 of 4 (COMPLETE)
-**Next action:** Phase 2 complete. Begin Phase 3 (Optimized compression + export tools).
+**Last updated:** 2026-03-08
+**Current phase:** 03-optimized-compression-export-tools
+**Current plan:** 1 of 1 (COMPLETE)
+**Next action:** Phase 3 plan 1 complete. Compression building blocks (Zdepth + H.264) ready. Next: wire into recording pipeline.
 
 ---
 
@@ -13,7 +13,7 @@
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
 | 2 | COMPLETE (4/4 plans done, physical camera verified) | GUI mode + headless systemd service |
-| 3 | NOT STARTED | Optimized compression + export tools |
+| 3 | IN PROGRESS (1/1 plans done) | Optimized compression + export tools |
 
 ---
 
@@ -61,6 +61,10 @@
 | Config+CLI merge | load_config() first, then cxxopts count() > 0 guards CLI overrides; 0-sentinel for numeric flags | 2026-02-19 |
 | Headless filename add_timestamp_suffix | make_output_path() takes add_timestamp_suffix=false for headless; session name already has timestamp from make_session_name() | 2026-02-19 |
 | Physical camera verification | D435 verified at ~27fps GUI / ~25fps headless, 0 dropped frames, clean shutdown, double-timestamp bug fixed | 2026-02-19 |
+| Zdepth encode mode | kNotQuantized8191mm for D435 (lossless 0-8191mm, covers indoor use) | 2026-03-08 |
+| Zdepth zstd target guard | INTERFACE target + install(EXPORT zdepth) prevents bundled zstd symbol clash | 2026-03-08 |
+| Compression wrapper pattern | Pimpl (unique_ptr<Impl>) to isolate C library headers from consumers | 2026-03-08 |
+| H.264 encoder config | CRF 23, preset fast, max_b_frames=0, gop_size=fps for real-time recording | 2026-03-08 |
 
 ---
 
@@ -86,6 +90,7 @@
 | 2026-02-19 | 02-02 | ~8 min | 1/1 | 90a9dd8 |
 | 2026-02-19 | 02-03 | ~3 min | 2/2 | 2dfae82, 30f4b67 |
 | 2026-02-19 | 02-04 | ~35 min | 3/3 | 17f77a9, 8e6e3e5, bb265cd |
+| 2026-03-08 | 03-01 | ~5 min | 3/3 | d1dcfa4, 0343e3a, 65dd038 |
 
 ---
 
