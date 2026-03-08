@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-03-08
 **Current phase:** 03-optimized-compression-export-tools
-**Current plan:** 1 of 1 (COMPLETE)
-**Next action:** Phase 3 plan 1 complete. Compression building blocks (Zdepth + H.264) ready. Next: wire into recording pipeline.
+**Current plan:** 2 of 5 (COMPLETE)
+**Next action:** Phase 3 plan 2 complete. Pipeline wired with H.264+Zdepth, info/export CLI ready. Next: Python reader module (pybind11).
 
 ---
 
@@ -13,7 +13,7 @@
 |-------|--------|-------------|
 | 1 | COMPLETE (4/4 plans done) | Core capture engine + MVP storage |
 | 2 | COMPLETE (4/4 plans done, physical camera verified) | GUI mode + headless systemd service |
-| 3 | IN PROGRESS (1/1 plans done) | Optimized compression + export tools |
+| 3 | IN PROGRESS (2/5 plans done) | Optimized compression + export tools |
 
 ---
 
@@ -65,6 +65,10 @@
 | Zdepth zstd target guard | INTERFACE target + install(EXPORT zdepth) prevents bundled zstd symbol clash | 2026-03-08 |
 | Compression wrapper pattern | Pimpl (unique_ptr<Impl>) to isolate C library headers from consumers | 2026-03-08 |
 | H.264 encoder config | CRF 23, preset fast, max_b_frames=0, gop_size=fps for real-time recording | 2026-03-08 |
+| H.264 flush design | write_trailing_codec_data() writes raw bytes without IndexEntry -- prevents index table corruption | 2026-03-08 |
+| Subcommand dispatch | info/export intercepted before cxxopts parsing via argv[1] check | 2026-03-08 |
+| Zdepth GOP strategy | Keyframe every 30 frames (frame_number % 30 == 0) for ~1s seek granularity | 2026-03-08 |
+| Export dispatch | execvp to Python with PYTHONPATH set to binary directory for .so module discovery | 2026-03-08 |
 
 ---
 
@@ -91,6 +95,7 @@
 | 2026-02-19 | 02-03 | ~3 min | 2/2 | 2dfae82, 30f4b67 |
 | 2026-02-19 | 02-04 | ~35 min | 3/3 | 17f77a9, 8e6e3e5, bb265cd |
 | 2026-03-08 | 03-01 | ~5 min | 3/3 | d1dcfa4, 0343e3a, 65dd038 |
+| 2026-03-08 | 03-02 | ~3 min | 2/2 | 977afe4, 2fa2dc3 |
 
 ---
 
