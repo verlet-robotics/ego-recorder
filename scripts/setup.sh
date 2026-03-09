@@ -249,6 +249,7 @@ install_system_deps() {
         # FFmpeg — C++ encoder needs avcodec/avutil/swscale,
         # Rust ffmpeg-next crate also needs avformat/swresample/avfilter
         libavcodec-dev
+        libavdevice-dev
         libavfilter-dev
         libavformat-dev
         libavutil-dev
