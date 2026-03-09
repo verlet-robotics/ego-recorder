@@ -7,14 +7,22 @@
 ```bash
 git clone https://github.com/verlet-robotics/ego-recorder.git
 cd ego-recorder
-./scripts/setup.sh
+./scripts/setup-station.sh
 ```
 
-For headless-only machines (no display):
+This installs only what's needed to record (skips Rust export tools, Python deps, and tests). For headless-only machines (no display):
 
 ```bash
-./scripts/setup.sh --headless
+./scripts/setup-station.sh --headless
 ```
+
+To deploy as a systemd service in one step:
+
+```bash
+./scripts/setup-station.sh --headless --with-systemd
+```
+
+> **Need export tools too?** Run `./scripts/setup.sh` instead for the full install (RLDS/LeRobot export, Python bindings, tests).
 
 ### 2. Set up recordings
 
@@ -138,7 +146,7 @@ The service auto-recovers from camera disconnects and prevents lid-close suspend
 ```bash
 cd ego-recorder
 git pull
-./scripts/setup.sh
+./scripts/setup-station.sh            # rebuilds recorder only
 sudo systemctl restart ego-recorder.service   # if using systemd
 ```
 
