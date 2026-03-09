@@ -7,11 +7,15 @@
 #include <cstring>
 #include <stdexcept>
 
+#include <fcntl.h>   // open, O_RDONLY
+#include <unistd.h>  // fdatasync, close
+
 // ---------------------------------------------------------------------------
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-FileWriter::FileWriter(const std::string& filepath) {
+FileWriter::FileWriter(const std::string& filepath)
+    : filepath_(filepath) {
     file_.open(filepath, std::ios::binary | std::ios::trunc);
     if (!file_.is_open()) {
         throw std::runtime_error("FileWriter: failed to open file for writing: " + filepath);
@@ -43,6 +47,8 @@ void FileWriter::write_header(const FileHeader& header) {
     }
     if (!raw_write(&header, sizeof(header))) {
         std::fprintf(stderr, "FileWriter: write_header failed (I/O error)\n");
+        write_error_.store(true, std::memory_order_release);
+        return;
     }
     header_written_ = true;
 }
@@ -51,14 +57,14 @@ void FileWriter::write_header(const FileHeader& header) {
 // write_frame
 // ---------------------------------------------------------------------------
 
-void FileWriter::write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
+bool FileWriter::write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
                              const uint8_t* depth_compressed, size_t depth_size,
                              uint64_t timestamp_us,
                              uint64_t frame_number,
                              const std::vector<IMUSampleWire>& imu_samples) {
     if (finalized_) {
         std::fprintf(stderr, "FileWriter: write_frame called after finalize -- ignored\n");
-        return;
+        return false;
     }
 
     // Record byte offset of this frame block for the index.
@@ -94,8 +100,9 @@ void FileWriter::write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
     if (!ok) {
         std::fprintf(stderr, "FileWriter: write error during frame %" PRIu64 "\n",
                      frame_number);
+        write_error_.store(true, std::memory_order_release);
         // Do not append an index entry for a partially-written frame.
-        return;
+        return false;
     }
 
     // Update index and timestamps.
@@ -105,6 +112,7 @@ void FileWriter::write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
         first_timestamp_ = timestamp_us;
     }
     last_timestamp_ = timestamp_us;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +125,10 @@ void FileWriter::write_trailing_codec_data(const uint8_t* data, size_t size) {
         return;
     }
     if (size > 0 && data != nullptr) {
-        raw_write(data, size);
+        if (!raw_write(data, size)) {
+            std::fprintf(stderr, "FileWriter: write_trailing_codec_data failed (I/O error)\n");
+            write_error_.store(true, std::memory_order_release);
+        }
     }
 }
 
@@ -162,6 +173,15 @@ void FileWriter::finalize() {
 
     file_.flush();
     file_.close();
+
+    // Ensure data (especially the index table and footer written last) reaches
+    // persistent storage.  Re-open read-only just for the sync -- std::ofstream
+    // does not expose the file descriptor portably.
+    int fd = ::open(filepath_.c_str(), O_RDONLY);
+    if (fd >= 0) {
+        ::fdatasync(fd);
+        ::close(fd);
+    }
 }
 
 // ---------------------------------------------------------------------------

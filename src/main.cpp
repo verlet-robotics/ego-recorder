@@ -703,12 +703,17 @@ int main(int argc, char* argv[]) {
                         imu_wire.push_back(w);
                     }
 
-                    writer->write_frame(
+                    bool write_ok = writer->write_frame(
                         h264_data, h264_size,
                         zdepth_data, zdepth_size,
                         frame.timestamp_us,
                         frame.frame_number,
                         imu_wire);
+
+                    if (!write_ok) {
+                        std::fprintf(stderr, "Writer: I/O error, stopping writer thread\n");
+                        break;
+                    }
 
                     stats.frame_written();
                     stats.bytes_written(h264_size + zdepth_size);
@@ -1046,6 +1051,15 @@ int main(int argc, char* argv[]) {
                 break;
             }
 
+            // Check for writer I/O errors (disk full, bad sector, etc.).
+            // Stop recording immediately to preserve what we have.
+            if (recording_active.load(std::memory_order_acquire)
+                && writer && writer->has_write_error())
+            {
+                fprintf(stderr, "\nWrite error detected -- stopping recording to preserve data\n");
+                stop_recording();
+            }
+
             // For headless mode, also print stats to stderr periodically.
             // GuiPresenter renders stats to the overlay -- no stderr needed.
             if (config.headless) {
@@ -1182,9 +1196,20 @@ int main(int argc, char* argv[]) {
 
     } catch (const rs2::error& e) {
         fprintf(stderr, "\nRealSense error: %s\n", e.what());
+        // Emergency cleanup: finalize recording so the file isn't corrupt.
+        recording_active.store(false, std::memory_order_release);
+        if (queue) queue->close();
+        if (writer_thread.joinable()) writer_thread.join();
+        if (writer && !writer->is_finalized()) writer->finalize();
+        writer.reset();
         return 1;
     } catch (const std::exception& e) {
         fprintf(stderr, "\nError: %s\n", e.what());
+        recording_active.store(false, std::memory_order_release);
+        if (queue) queue->close();
+        if (writer_thread.joinable()) writer_thread.join();
+        if (writer && !writer->is_finalized()) writer->finalize();
+        writer.reset();
         return 1;
     }
 }

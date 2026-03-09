@@ -12,6 +12,7 @@
 
 #include "storage/binary_format.h"
 
+#include <atomic>
 #include <string>
 #include <vector>
 #include <fstream>
@@ -44,7 +45,8 @@ public:
     /// @param timestamp_us     Frame hardware timestamp in microseconds
     /// @param frame_number     Sequential 0-based frame index
     /// @param imu_samples      IMU samples accumulated since the last frame
-    void write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
+    /// Returns false on write error (caller should stop recording).
+    bool write_frame(const uint8_t* rgb_compressed,   size_t rgb_size,
                      const uint8_t* depth_compressed, size_t depth_size,
                      uint64_t timestamp_us,
                      uint64_t frame_number,
@@ -64,11 +66,16 @@ public:
     /// Returns true if finalize() has been called successfully.
     bool is_finalized() const { return finalized_; }
 
+    /// Returns true if any write error has occurred (disk full, I/O error, etc.).
+    /// Thread-safe: can be polled from a different thread than the one calling write_frame().
+    bool has_write_error() const { return write_error_.load(std::memory_order_acquire); }
+
 private:
     // Write buffer size: 256 KB reduces syscall overhead on sequential writes.
     static constexpr size_t WRITE_BUFFER_SIZE = 256 * 1024;
 
     std::ofstream file_;
+    std::string   filepath_;                     ///< Stored for fdatasync after close
     char          write_buf_[WRITE_BUFFER_SIZE]; ///< Buffer for rdbuf()->pubsetbuf()
 
     std::vector<IndexEntry> index_;   ///< In-memory index, one entry per frame
@@ -78,6 +85,7 @@ private:
 
     bool header_written_{false};
     bool finalized_{false};
+    std::atomic<bool> write_error_{false};  ///< Set on first I/O error; thread-safe
 
     /// Helper: write \p len bytes from \p data; checks file_.good() after write.
     /// Returns false on write error (caller decides whether to abort).
