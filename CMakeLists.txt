@@ -106,17 +106,17 @@ pkg_check_modules(AVCODEC REQUIRED IMPORTED_TARGET libavcodec)
 pkg_check_modules(AVUTIL REQUIRED IMPORTED_TARGET libavutil)
 pkg_check_modules(SWSCALE REQUIRED IMPORTED_TARGET libswscale)
 
-# pybind11 via FetchContent (for Python extension module in later plans)
-FetchContent_Declare(
-    pybind11
-    GIT_REPOSITORY https://github.com/pybind/pybind11.git
-    GIT_TAG        v2.13.6
-)
-FetchContent_MakeAvailable(pybind11)
-
 # Optional Python extension module
 option(WITH_PYTHON "Build Python extension module" ON)
 if(WITH_PYTHON)
+    # pybind11 via FetchContent
+    FetchContent_Declare(
+        pybind11
+        GIT_REPOSITORY https://github.com/pybind/pybind11.git
+        GIT_TAG        v2.13.6
+    )
+    FetchContent_MakeAvailable(pybind11)
+
     find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
     # Build the egorec_reader Python extension module
