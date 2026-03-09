@@ -219,13 +219,21 @@ install_realsense_apt() {
     local codename="${VERSION_CODENAME:-noble}"
     local repo_line="deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo ${codename} main"
 
-    if ! grep -qF "librealsense.intel.com" /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; then
-        info "Adding Intel RealSense apt repository (${codename})..."
-        echo "$repo_line" | sudo tee /etc/apt/sources.list.d/librealsense.list > /dev/null
-        sudo apt-get update -qq
+    info "Adding Intel RealSense apt repository (${codename})..."
+    echo "$repo_line" | sudo tee /etc/apt/sources.list.d/librealsense.list > /dev/null
+
+    if ! sudo apt-get update -qq 2>/dev/null; then
+        warn "Intel apt repo not available for ${codename} — removing repo entry"
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+        sudo apt-get update -qq 2>/dev/null || true
+        return 1
     fi
 
-    sudo apt-get install -y librealsense2-dev librealsense2-utils 2>/dev/null
+    if ! sudo apt-get install -y librealsense2-dev librealsense2-utils 2>/dev/null; then
+        warn "librealsense2 packages not available — removing repo entry"
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+        return 1
+    fi
 }
 
 install_realsense_from_source() {
@@ -332,6 +340,14 @@ install_rust() {
 
 install_system_deps() {
     info "Installing system dependencies..."
+
+    # Remove any stale Intel RealSense repo that may poison apt-get update
+    # (e.g. if a previous run added it for an unsupported Ubuntu codename).
+    # The repo will be re-added properly by install_realsense_apt if needed.
+    if [[ -f /etc/apt/sources.list.d/librealsense.list ]]; then
+        info "Removing stale Intel RealSense apt repo (will re-add if needed)..."
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+    fi
 
     local packages=(
         # Build tools
