@@ -7,7 +7,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <fcntl.h>   // open, O_RDONLY
+#include <fcntl.h>   // open, O_WRONLY
 #include <unistd.h>  // fdatasync, close
 
 // ---------------------------------------------------------------------------
