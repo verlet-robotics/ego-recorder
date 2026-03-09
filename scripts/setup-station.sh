@@ -5,8 +5,9 @@
 # Skips Rust export tools, Python deps, and tests.
 #
 # Usage:
-#   ./scripts/setup-station.sh              # GUI build (default)
-#   ./scripts/setup-station.sh --headless   # No GUI
+#   ./scripts/setup-station.sh                       # GUI build (default)
+#   ./scripts/setup-station.sh --headless             # No GUI
+#   ./scripts/setup-station.sh --headless --with-systemd  # Headless + systemd service
 
 set -euo pipefail
 
@@ -26,13 +27,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${PROJECT_DIR}/build"
 WITH_GUI=ON
+INSTALL_SYSTEMD=false
 NPROC=$(nproc 2>/dev/null || echo 4)
+
+# Track whether librealsense was built from source (for udev rules)
+REALSENSE_BUILT_FROM_SOURCE=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --headless) WITH_GUI=OFF; shift ;;
+        --headless)      WITH_GUI=OFF; shift ;;
+        --with-systemd)  INSTALL_SYSTEMD=true; shift ;;
         --help|-h)
-            echo "Usage: ./scripts/setup-station.sh [--headless]"
+            echo "Usage: ./scripts/setup-station.sh [--headless] [--with-systemd]"
+            echo ""
+            echo "Options:"
+            echo "  --headless       Build without GUI (no GLFW/OpenGL)"
+            echo "  --with-systemd   Deploy as a systemd service after building"
             exit 0 ;;
         *) err "Unknown option: $1"; exit 1 ;;
     esac
@@ -43,6 +53,14 @@ done
 # ---------------------------------------------------------------------------
 install_deps() {
     info "Installing system dependencies..."
+
+    # Remove any stale Intel RealSense repo that may poison apt-get update
+    # (e.g. if a previous run added it for an unsupported Ubuntu codename).
+    # The repo will be re-added properly by install_realsense_apt if needed.
+    if [[ -f /etc/apt/sources.list.d/librealsense.list ]]; then
+        info "Removing stale Intel RealSense apt repo (will re-add if needed)..."
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+    fi
 
     local packages=(
         build-essential
@@ -116,6 +134,7 @@ install_realsense() {
     # Fallback: build from source
     warn "Intel apt repo packages unavailable — building librealsense from source..."
     install_realsense_from_source
+    REALSENSE_BUILT_FROM_SOURCE=true
     ok "Intel RealSense SDK built and installed from source"
 }
 
@@ -130,19 +149,31 @@ install_realsense_apt() {
     local codename="${VERSION_CODENAME:-noble}"
     local repo_line="deb [signed-by=/etc/apt/keyrings/librealsense.pgp] https://librealsense.intel.com/Debian/apt-repo ${codename} main"
 
-    if ! grep -qF "librealsense.intel.com" /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources 2>/dev/null; then
-        echo "$repo_line" | sudo tee /etc/apt/sources.list.d/librealsense.list > /dev/null
-        sudo apt-get update -qq
+    echo "$repo_line" | sudo tee /etc/apt/sources.list.d/librealsense.list > /dev/null
+
+    if ! sudo apt-get update -qq 2>/dev/null; then
+        warn "Intel apt repo not available for ${codename} — removing repo entry"
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+        sudo apt-get update -qq 2>/dev/null || true
+        return 1
     fi
 
-    sudo apt-get install -y librealsense2-dev librealsense2-utils 2>/dev/null
+    if ! sudo apt-get install -y librealsense2-dev librealsense2-utils 2>/dev/null; then
+        warn "librealsense2 packages not available — removing repo entry"
+        sudo rm -f /etc/apt/sources.list.d/librealsense.list
+        return 1
+    fi
 }
 
 install_realsense_from_source() {
     local rs_dir="${SCRIPT_DIR}/librealsense"
     local rs_build="${rs_dir}/build"
 
-    sudo apt-get install -y libusb-1.0-0-dev libglfw3-dev libgtk-3-dev
+    local rs_deps=(libusb-1.0-0-dev)
+    if [[ "$WITH_GUI" == "ON" ]]; then
+        rs_deps+=(libglfw3-dev libgtk-3-dev)
+    fi
+    sudo apt-get install -y "${rs_deps[@]}"
 
     if [[ ! -d "$rs_dir" ]]; then
         info "Cloning librealsense..."
@@ -156,7 +187,8 @@ install_realsense_from_source() {
     cmake -S "$rs_dir" -B "$rs_build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_EXAMPLES=OFF \
-        -DBUILD_GRAPHICAL_EXAMPLES=OFF
+        -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+        -DBUILD_GLSL_EXTENSIONS=OFF
 
     info "Building librealsense (this may take a while)..."
     cmake --build "$rs_build" --parallel "$NPROC"
@@ -167,7 +199,61 @@ install_realsense_from_source() {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Build (recorder only — no Rust, no Python, no tests)
+# 3. udev rules (camera access without root + USB autosuspend)
+# ---------------------------------------------------------------------------
+install_udev_rules() {
+    info "Installing udev rules..."
+
+    local udev_dir="/etc/udev/rules.d"
+
+    # If librealsense was built from source, install its udev rules so the
+    # camera is accessible without root.
+    if [[ "$REALSENSE_BUILT_FROM_SOURCE" == true ]]; then
+        local rs_rules="${SCRIPT_DIR}/librealsense/config/99-realsense-libusb.rules"
+        if [[ -f "$rs_rules" ]]; then
+            sudo install -m 644 "$rs_rules" "${udev_dir}/99-realsense-libusb.rules"
+            ok "Installed librealsense udev rules"
+        else
+            warn "librealsense udev rules not found at ${rs_rules} — camera may require sudo"
+        fi
+    fi
+
+    # Always install ego-recorder rules (USB autosuspend prevention)
+    local ego_rules="${PROJECT_DIR}/deploy/99-ego-recorder.rules"
+    if [[ -f "$ego_rules" ]]; then
+        sudo install -m 644 "$ego_rules" "${udev_dir}/99-ego-recorder.rules"
+        ok "Installed ego-recorder udev rules (USB autosuspend)"
+    fi
+
+    sudo udevadm control --reload-rules
+    sudo udevadm trigger
+}
+
+# ---------------------------------------------------------------------------
+# 4. User group access (plugdev + video for camera without root)
+# ---------------------------------------------------------------------------
+setup_user_groups() {
+    local target_user="${SUDO_USER:-$USER}"
+    if [[ "$target_user" == "root" ]]; then
+        return 0
+    fi
+
+    local groups_added=()
+    for grp in plugdev video; do
+        if ! id -nG "$target_user" | grep -qw "$grp"; then
+            sudo usermod -aG "$grp" "$target_user"
+            groups_added+=("$grp")
+        fi
+    done
+
+    if [[ ${#groups_added[@]} -gt 0 ]]; then
+        ok "Added ${target_user} to groups: ${groups_added[*]}"
+        warn "Log out and back in for group changes to take effect"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 5. Build (recorder only — no Rust, no Python, no tests)
 # ---------------------------------------------------------------------------
 build() {
     info "Configuring CMake..."
@@ -196,25 +282,49 @@ build() {
 }
 
 # ---------------------------------------------------------------------------
+# 6. Systemd deployment (optional)
+# ---------------------------------------------------------------------------
+deploy_systemd() {
+    if [[ "$INSTALL_SYSTEMD" != true ]]; then
+        return 0
+    fi
+
+    info "Running systemd deployment..."
+    if [[ "$(id -u)" -ne 0 ]]; then
+        sudo bash "${PROJECT_DIR}/deploy/install.sh"
+    else
+        bash "${PROJECT_DIR}/deploy/install.sh"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${BOLD}═══════════════════════════════════════${NC}"
 echo -e "${BOLD}  ego-recorder station setup${NC}"
 echo -e "${BOLD}═══════════════════════════════════════${NC}"
-echo -e "  GUI: ${WITH_GUI}"
+echo -e "  GUI:     ${WITH_GUI}"
+echo -e "  systemd: ${INSTALL_SYSTEMD}"
 echo ""
 
 cd "$PROJECT_DIR"
 install_deps
 install_realsense
+install_udev_rules
+setup_user_groups
 build
+deploy_systemd
 
 echo ""
 echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
 echo -e "  Binary: ${BUILD_DIR}/ego-recorder"
 echo ""
-if [[ "$WITH_GUI" == "ON" ]]; then
+if [[ "$INSTALL_SYSTEMD" == true ]]; then
+    echo "  Service installed. Next steps:"
+    echo "    1. Edit /etc/ego-recorder/config.toml"
+    echo "    2. systemctl enable --now ego-recorder.service"
+elif [[ "$WITH_GUI" == "ON" ]]; then
     echo "  Run: ${BUILD_DIR}/ego-recorder -s my_session -o ./recordings"
 else
     echo "  Run: ${BUILD_DIR}/ego-recorder --headless -o ./recordings -d 300"
