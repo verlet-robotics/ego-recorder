@@ -215,26 +215,44 @@ install_realsense_sdk() {
 # ---------------------------------------------------------------------------
 # 2. Install system dependencies
 # ---------------------------------------------------------------------------
+install_rust() {
+    if command -v cargo &>/dev/null; then
+        ok "Rust toolchain already installed ($(cargo --version))"
+        return 0
+    fi
+
+    info "Installing Rust toolchain via rustup..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+    ok "Rust toolchain installed ($(cargo --version))"
+}
+
 install_system_deps() {
     info "Installing system dependencies..."
 
     local packages=(
         # Build tools
+        build-essential
         cmake
-        g++
         pkg-config
         git
         curl
         ca-certificates
 
+        # Rust build deps (bindgen needs libclang)
+        libclang-dev
+
         # Compression libraries
         libzstd-dev
         libturbojpeg0-dev
 
-        # FFmpeg (H.264 encoding)
+        # FFmpeg — C++ encoder needs avcodec/avutil/swscale,
+        # Rust ffmpeg-next crate also needs avformat/swresample
         libavcodec-dev
+        libavformat-dev
         libavutil-dev
         libswscale-dev
+        libswresample-dev
 
         # Audio alerts (headless TTS for disconnect/reconnect)
         espeak-ng
@@ -385,6 +403,7 @@ main() {
     cd "$PROJECT_DIR"
 
     install_system_deps
+    install_rust
     install_realsense_sdk
     build_project
     run_tests
