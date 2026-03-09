@@ -317,16 +317,29 @@ build
 deploy_systemd
 
 echo ""
+echo -e "${GREEN}${BOLD}═══════════════════════════════════════${NC}"
 echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
+echo -e "${GREEN}${BOLD}═══════════════════════════════════════${NC}"
 echo -e "  Binary: ${BUILD_DIR}/ego-recorder"
 echo ""
+echo -e "${BOLD}  Next steps:${NC}"
+echo ""
+echo -e "  ${CYAN}1.${NC} Refresh your shell (picks up new group permissions):"
+echo ""
+echo -e "       exec su - \$USER"
+echo ""
+echo -e "  ${CYAN}2.${NC} Set up recordings directory:"
+echo ""
+echo -e "       ./scripts/setup-recordings.sh"
+echo ""
 if [[ "$INSTALL_SYSTEMD" == true ]]; then
-    echo "  Service installed. Next steps:"
-    echo "    1. Edit /etc/ego-recorder/config.toml"
-    echo "    2. systemctl enable --now ego-recorder.service"
-elif [[ "$WITH_GUI" == "ON" ]]; then
-    echo "  Run: ${BUILD_DIR}/ego-recorder -s my_session -o ./recordings"
+    echo -e "  ${CYAN}3.${NC} Configure and start the systemd service:"
+    echo ""
+    echo -e "       sudo nano /etc/ego-recorder/config.toml"
+    echo -e "       sudo systemctl enable --now ego-recorder.service"
 else
-    echo "  Run: ${BUILD_DIR}/ego-recorder --headless -o ./recordings -d 300"
+    echo -e "  ${CYAN}3.${NC} Start recording:"
+    echo ""
+    echo -e "       ./scripts/record.sh"
 fi
 echo ""
