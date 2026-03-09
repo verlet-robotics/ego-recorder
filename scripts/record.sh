@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BASE_DIR="/var/lib/ego-recorder"
+BASE_DIR="${PROJECT_DIR}/datasets"
 EGO_RECORDER="ego-recorder"
 
 # Colors

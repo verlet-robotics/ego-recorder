@@ -131,6 +131,11 @@ private:
     bool        disconnected_ = false;
     ViewMode    view_mode_    = ViewMode::SIDE_BY_SIDE;
 
+    // ---- Countdown before recording ----
+    static constexpr int kCountdownSeconds = 3;
+    bool   countdown_active_ = false;
+    double countdown_start_  = 0.0;   // glfwGetTime() when countdown began
+
     // ---- Cached stats for overlay ----
     uint64_t stat_captured_      = 0;
     uint64_t stat_written_       = 0;

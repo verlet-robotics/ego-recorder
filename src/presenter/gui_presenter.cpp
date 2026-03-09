@@ -254,15 +254,17 @@ bool GuiPresenter::tick()
 
         const char* btn_label = recording_
             ? "Stop Recording (Space/Esc)"
-            : "Start Recording (Space)";
+            : (countdown_active_ ? "Cancel Countdown (Esc)" : "Start Recording (Space)");
 
         if (ImGui::Button(btn_label)) {
             if (recording_) {
                 recording_ = false;
                 if (on_stop_recording_) on_stop_recording_();
+            } else if (countdown_active_) {
+                countdown_active_ = false;
             } else {
-                recording_ = true;
-                if (on_start_recording_) on_start_recording_();
+                countdown_active_ = true;
+                countdown_start_  = glfwGetTime();
             }
         }
         if (name_empty) ImGui::EndDisabled();
@@ -341,6 +343,57 @@ bool GuiPresenter::tick()
     }
 
     // ------------------------------------------------------------------
+    // 9b. Countdown overlay -- large centered number over the preview
+    // ------------------------------------------------------------------
+    if (countdown_active_) {
+        const double elapsed = glfwGetTime() - countdown_start_;
+        const int remaining  = kCountdownSeconds - static_cast<int>(elapsed);
+
+        if (remaining <= 0) {
+            // Countdown finished -- start recording
+            countdown_active_ = false;
+            recording_ = true;
+            if (on_start_recording_) on_start_recording_();
+        } else {
+            // Draw centered countdown number
+            char count_text[4];
+            std::snprintf(count_text, sizeof(count_text), "%d", remaining);
+
+            // Semi-transparent full-screen backdrop over the preview area
+            ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(fb_w), preview_h), ImGuiCond_Always);
+            ImGui::SetNextWindowBgAlpha(0.3f);
+
+            const ImGuiWindowFlags cd_flags =
+                ImGuiWindowFlags_NoDecoration      |
+                ImGuiWindowFlags_NoInputs          |
+                ImGuiWindowFlags_NoMove            |
+                ImGuiWindowFlags_NoScrollbar       |
+                ImGuiWindowFlags_NoBringToFrontOnFocus;
+
+            ImGui::Begin("Countdown", nullptr, cd_flags);
+            {
+                // Scale font for the big number
+                const float font_scale = 8.0f;
+                ImGui::SetWindowFontScale(font_scale);
+
+                const ImVec2 text_size = ImGui::CalcTextSize(count_text);
+                const ImVec2 avail_cd  = ImGui::GetContentRegionAvail();
+
+                // Center the number
+                ImGui::SetCursorPos(ImVec2(
+                    (avail_cd.x - text_size.x) * 0.5f,
+                    (avail_cd.y - text_size.y) * 0.5f
+                ));
+
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 0.9f), "%s", count_text);
+                ImGui::SetWindowFontScale(1.0f);
+            }
+            ImGui::End();
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 10. Keyboard shortcuts (only when ImGui is not eating keyboard)
     // ------------------------------------------------------------------
     {
@@ -351,9 +404,12 @@ bool GuiPresenter::tick()
                     if (recording_) {
                         recording_ = false;
                         if (on_stop_recording_) on_stop_recording_();
+                    } else if (countdown_active_) {
+                        // Space during countdown -- cancel it
+                        countdown_active_ = false;
                     } else {
-                        recording_ = true;
-                        if (on_start_recording_) on_start_recording_();
+                        countdown_active_ = true;
+                        countdown_start_  = glfwGetTime();
                     }
                 }
             }
@@ -366,7 +422,10 @@ bool GuiPresenter::tick()
                 }
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                if (recording_) {
+                if (countdown_active_) {
+                    // Cancel countdown
+                    countdown_active_ = false;
+                } else if (recording_) {
                     // Cancel running recording
                     recording_ = false;
                     if (on_stop_recording_) on_stop_recording_();

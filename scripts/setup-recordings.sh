@@ -121,7 +121,7 @@ if [[ "$ans" =~ ^[Yy] ]]; then
     USE_SYSTEMD=true
     # Default to the standard production path
     if [[ "$OUTPUT_DIR" == "./datasets/${DATASET_NAME}" || "$OUTPUT_DIR" == "datasets/${DATASET_NAME}" ]]; then
-        OUTPUT_DIR="/var/lib/ego-recorder/${DATASET_NAME}"
+        OUTPUT_DIR="${PROJECT_DIR}/datasets/${DATASET_NAME}"
         info "Using default service path: ${OUTPUT_DIR}"
     fi
 fi
