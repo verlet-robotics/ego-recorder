@@ -8,6 +8,7 @@ compile_commands.json
 imgui.ini
 __pycache__/
 rust/target/
+scripts/librealsense/
 datasets/
 recordings/
 test/

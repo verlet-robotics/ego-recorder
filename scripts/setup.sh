@@ -189,6 +189,19 @@ install_realsense_sdk() {
 
     info "Installing Intel RealSense SDK..."
 
+    # Try the Intel apt repo first
+    if install_realsense_apt; then
+        ok "Intel RealSense SDK installed via apt"
+        return 0
+    fi
+
+    # Fallback: build from source
+    warn "Intel apt repo packages unavailable — building librealsense from source..."
+    install_realsense_from_source
+    ok "Intel RealSense SDK built and installed from source"
+}
+
+install_realsense_apt() {
     # Add Intel RealSense apt repository
     # https://github.com/IntelRealSense/librealsense/blob/master/doc/distribution_linux.md
     sudo mkdir -p /etc/apt/keyrings
@@ -208,8 +221,35 @@ install_realsense_sdk() {
         sudo apt-get update -qq
     fi
 
-    sudo apt-get install -y librealsense2-dev librealsense2-utils
-    ok "Intel RealSense SDK installed"
+    sudo apt-get install -y librealsense2-dev librealsense2-utils 2>/dev/null
+}
+
+install_realsense_from_source() {
+    local rs_dir="${SCRIPT_DIR}/librealsense"
+    local rs_build="${rs_dir}/build"
+
+    sudo apt-get install -y libusb-1.0-0-dev libglfw3-dev libgtk-3-dev
+
+    if [[ ! -d "$rs_dir" ]]; then
+        info "Cloning librealsense..."
+        git clone --depth 1 https://github.com/IntelRealSense/librealsense.git "$rs_dir"
+    else
+        info "Using existing librealsense source at ${rs_dir}"
+    fi
+
+    mkdir -p "$rs_build"
+    info "Configuring librealsense..."
+    cmake -S "$rs_dir" -B "$rs_build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_EXAMPLES=OFF \
+        -DBUILD_GRAPHICAL_EXAMPLES=OFF
+
+    info "Building librealsense (this may take a while)..."
+    cmake --build "$rs_build" --parallel "$NPROC"
+
+    info "Installing librealsense..."
+    sudo cmake --install "$rs_build"
+    sudo ldconfig
 }
 
 # ---------------------------------------------------------------------------
@@ -245,6 +285,9 @@ install_system_deps() {
         # Compression libraries
         libzstd-dev
         libturbojpeg0-dev
+
+        # OpenSSL (needed if building librealsense from source)
+        libssl-dev
 
         # FFmpeg — C++ encoder needs avcodec/avutil/swscale,
         # Rust ffmpeg-next crate also needs avformat/swresample/avfilter
