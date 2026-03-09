@@ -337,17 +337,10 @@ install_python_export() {
 
     info "Installing Python export dependencies..."
 
-    # Ensure pip is available
-    if ! command -v pip3 &>/dev/null && ! command -v pip &>/dev/null; then
-        sudo apt-get install -y python3-pip python3-venv
-    fi
+    sudo apt-get install -y python3-pip python3-venv
 
-    local pip_cmd="pip3"
-    command -v pip3 &>/dev/null || pip_cmd="pip"
-
-    # Use --user only if we're NOT inside a virtualenv.
-    # Check VIRTUAL_ENV/CONDA_PREFIX env vars AND ask Python directly
-    # (handles venvs activated without sourcing activate).
+    # If not already in a venv, create one at .venv/ to avoid PEP 668
+    # "externally-managed-environment" errors on Ubuntu 24.04+.
     local in_venv=false
     if [[ -n "${VIRTUAL_ENV:-}" || -n "${CONDA_PREFIX:-}" ]]; then
         in_venv=true
@@ -355,22 +348,27 @@ install_python_export() {
         in_venv=true
     fi
 
-    local pip_flags=()
     if [[ "$in_venv" == false ]]; then
-        pip_flags+=(--user)
+        local venv_dir="${PROJECT_DIR}/.venv"
+        if [[ ! -d "$venv_dir" ]]; then
+            info "Creating Python venv at ${venv_dir}..."
+            python3 -m venv "$venv_dir"
+        fi
+        source "${venv_dir}/bin/activate"
+        ok "Activated venv: ${venv_dir}"
     fi
 
     # RLDS export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-rlds.txt" ]]; then
         info "Installing RLDS export dependencies..."
-        $pip_cmd install "${pip_flags[@]}" -r "${PROJECT_DIR}/python/requirements-rlds.txt"
+        pip install -r "${PROJECT_DIR}/python/requirements-rlds.txt"
         ok "RLDS export dependencies installed"
     fi
 
     # LeRobot export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-lerobot.txt" ]]; then
         info "Installing LeRobot export dependencies..."
-        $pip_cmd install "${pip_flags[@]}" -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
+        pip install -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
         ok "LeRobot export dependencies installed"
     fi
 }
