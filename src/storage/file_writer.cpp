@@ -175,9 +175,10 @@ void FileWriter::finalize() {
     file_.close();
 
     // Ensure data (especially the index table and footer written last) reaches
-    // persistent storage.  Re-open read-only just for the sync -- std::ofstream
-    // does not expose the file descriptor portably.
-    int fd = ::open(filepath_.c_str(), O_RDONLY);
+    // persistent storage.  Re-open write-only just for the sync -- fdatasync()
+    // requires a writable fd per POSIX. O_WRONLY without O_TRUNC is safe:
+    // no data is modified, we only flush dirty pages.
+    int fd = ::open(filepath_.c_str(), O_WRONLY);
     if (fd >= 0) {
         ::fdatasync(fd);
         ::close(fd);
