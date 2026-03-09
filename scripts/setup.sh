@@ -32,6 +32,27 @@ warn()  { echo -e "${YELLOW}[setup]${NC} $*"; }
 err()   { echo -e "${RED}[setup]${NC} $*" >&2; }
 
 # ---------------------------------------------------------------------------
+# Disk space check
+# ---------------------------------------------------------------------------
+# Minimum free space in GB before we attempt large downloads/builds.
+MIN_FREE_GB=5
+
+check_disk_space() {
+    local label="$1"
+    local avail_kb
+    avail_kb=$(df --output=avail "$PROJECT_DIR" 2>/dev/null | tail -1 | tr -d ' ')
+    if [[ -z "$avail_kb" ]]; then
+        return 0  # skip check if df fails
+    fi
+    local avail_gb=$(( avail_kb / 1048576 ))
+    if [[ "$avail_gb" -lt "$MIN_FREE_GB" ]]; then
+        err "Only ${avail_gb} GB free on disk — ${label} needs at least ${MIN_FREE_GB} GB."
+        err "Free space with: sudo apt clean && pip cache purge"
+        exit 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -333,9 +354,19 @@ install_rust() {
     fi
 
     info "Installing Rust toolchain via rustup..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
-    ok "Rust toolchain installed ($(cargo --version))"
+    local attempt
+    for attempt in 1 2 3; do
+        if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; then
+            source "$HOME/.cargo/env"
+            ok "Rust toolchain installed ($(cargo --version))"
+            return 0
+        fi
+        warn "rustup install attempt ${attempt}/3 failed — retrying in $((attempt * 2))s..."
+        sleep $((attempt * 2))
+    done
+    err "Failed to install Rust toolchain after 3 attempts."
+    err "Try manually: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+    exit 1
 }
 
 install_system_deps() {
@@ -482,15 +513,25 @@ install_python_export() {
 
     # RLDS export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-rlds.txt" ]]; then
+        check_disk_space "RLDS Python dependencies"
         info "Installing RLDS export dependencies..."
-        pip install -r "${PROJECT_DIR}/python/requirements-rlds.txt"
+        if ! pip install --no-cache-dir -r "${PROJECT_DIR}/python/requirements-rlds.txt"; then
+            err "Failed to install RLDS export dependencies."
+            err "If you see 'No space left on device', free disk space and retry."
+            exit 1
+        fi
         ok "RLDS export dependencies installed"
     fi
 
     # LeRobot export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-lerobot.txt" ]]; then
+        check_disk_space "LeRobot Python dependencies"
         info "Installing LeRobot export dependencies..."
-        pip install -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
+        if ! pip install --no-cache-dir -r "${PROJECT_DIR}/python/requirements-lerobot.txt"; then
+            err "Failed to install LeRobot export dependencies."
+            err "If you see 'No space left on device', free disk space and retry."
+            exit 1
+        fi
         ok "LeRobot export dependencies installed"
     fi
 }
@@ -524,11 +565,13 @@ main() {
 
     cd "$PROJECT_DIR"
 
+    check_disk_space "system dependencies"
     install_system_deps
     install_rust
     install_realsense_sdk
     install_udev_rules
     setup_user_groups
+    check_disk_space "project build"
     build_project
     run_tests
     install_python_export
