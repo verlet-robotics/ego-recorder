@@ -45,6 +45,9 @@ INSTALL_SYSTEMD=false
 INTERACTIVE=false
 NPROC=$(nproc 2>/dev/null || echo 4)
 
+# Track whether librealsense was built from source (for udev rules)
+REALSENSE_BUILT_FROM_SOURCE=false
+
 # ---------------------------------------------------------------------------
 # Usage
 # ---------------------------------------------------------------------------
@@ -198,6 +201,7 @@ install_realsense_sdk() {
     # Fallback: build from source
     warn "Intel apt repo packages unavailable — building librealsense from source..."
     install_realsense_from_source
+    REALSENSE_BUILT_FROM_SOURCE=true
     ok "Intel RealSense SDK built and installed from source"
 }
 
@@ -228,7 +232,11 @@ install_realsense_from_source() {
     local rs_dir="${SCRIPT_DIR}/librealsense"
     local rs_build="${rs_dir}/build"
 
-    sudo apt-get install -y libusb-1.0-0-dev libglfw3-dev libgtk-3-dev
+    local rs_deps=(libusb-1.0-0-dev)
+    if [[ "$WITH_GUI" == "ON" ]]; then
+        rs_deps+=(libglfw3-dev libgtk-3-dev)
+    fi
+    sudo apt-get install -y "${rs_deps[@]}"
 
     if [[ ! -d "$rs_dir" ]]; then
         info "Cloning librealsense..."
@@ -242,7 +250,8 @@ install_realsense_from_source() {
     cmake -S "$rs_dir" -B "$rs_build" \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_EXAMPLES=OFF \
-        -DBUILD_GRAPHICAL_EXAMPLES=OFF
+        -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+        -DBUILD_GLSL_EXTENSIONS=OFF
 
     info "Building librealsense (this may take a while)..."
     cmake --build "$rs_build" --parallel "$NPROC"
@@ -250,6 +259,60 @@ install_realsense_from_source() {
     info "Installing librealsense..."
     sudo cmake --install "$rs_build"
     sudo ldconfig
+}
+
+# ---------------------------------------------------------------------------
+# udev rules (camera access without root + USB autosuspend)
+# ---------------------------------------------------------------------------
+install_udev_rules() {
+    info "Installing udev rules..."
+
+    local udev_dir="/etc/udev/rules.d"
+
+    # If librealsense was built from source, install its udev rules so the
+    # camera is accessible without root.
+    if [[ "$REALSENSE_BUILT_FROM_SOURCE" == true ]]; then
+        local rs_rules="${SCRIPT_DIR}/librealsense/config/99-realsense-libusb.rules"
+        if [[ -f "$rs_rules" ]]; then
+            sudo install -m 644 "$rs_rules" "${udev_dir}/99-realsense-libusb.rules"
+            ok "Installed librealsense udev rules"
+        else
+            warn "librealsense udev rules not found at ${rs_rules} — camera may require sudo"
+        fi
+    fi
+
+    # Always install ego-recorder rules (USB autosuspend prevention)
+    local ego_rules="${PROJECT_DIR}/deploy/99-ego-recorder.rules"
+    if [[ -f "$ego_rules" ]]; then
+        sudo install -m 644 "$ego_rules" "${udev_dir}/99-ego-recorder.rules"
+        ok "Installed ego-recorder udev rules (USB autosuspend)"
+    fi
+
+    sudo udevadm control --reload-rules
+    sudo udevadm trigger
+}
+
+# ---------------------------------------------------------------------------
+# User group access (plugdev + video for camera without root)
+# ---------------------------------------------------------------------------
+setup_user_groups() {
+    local target_user="${SUDO_USER:-$USER}"
+    if [[ "$target_user" == "root" ]]; then
+        return 0
+    fi
+
+    local groups_added=()
+    for grp in plugdev video; do
+        if ! id -nG "$target_user" | grep -qw "$grp"; then
+            sudo usermod -aG "$grp" "$target_user"
+            groups_added+=("$grp")
+        fi
+    done
+
+    if [[ ${#groups_added[@]} -gt 0 ]]; then
+        ok "Added ${target_user} to groups: ${groups_added[*]}"
+        warn "Log out and back in for group changes to take effect"
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -448,6 +511,8 @@ main() {
     install_system_deps
     install_rust
     install_realsense_sdk
+    install_udev_rules
+    setup_user_groups
     build_project
     run_tests
     install_python_export
