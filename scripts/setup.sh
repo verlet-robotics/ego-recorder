@@ -247,8 +247,9 @@ install_system_deps() {
         libturbojpeg0-dev
 
         # FFmpeg — C++ encoder needs avcodec/avutil/swscale,
-        # Rust ffmpeg-next crate also needs avformat/swresample
+        # Rust ffmpeg-next crate also needs avformat/swresample/avfilter
         libavcodec-dev
+        libavfilter-dev
         libavformat-dev
         libavutil-dev
         libswscale-dev
