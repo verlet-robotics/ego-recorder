@@ -33,12 +33,21 @@ error() { echo -e "${RED}[upload]${NC} $*" >&2; }
 source "${SCRIPT_DIR}/lib-env.sh"
 
 # ---------------------------------------------------------------------------
-# 0. Activate Python venv (if not already in one)
+# 0. Ensure Python venv with uploader deps
 # ---------------------------------------------------------------------------
 if [[ -z "${VIRTUAL_ENV:-}" && -z "${CONDA_PREFIX:-}" ]]; then
     venv_dir="${PROJECT_DIR}/.venv"
-    if [[ -d "$venv_dir" ]]; then
-        source "${venv_dir}/bin/activate"
+    if [[ ! -d "$venv_dir" ]]; then
+        info "Creating Python venv at ${venv_dir}..."
+        python3 -m venv "$venv_dir"
+    fi
+    source "${venv_dir}/bin/activate"
+
+    # Install uploader deps if boto3 is missing
+    if ! python3 -c "import boto3" 2>/dev/null; then
+        info "Installing uploader dependencies..."
+        pip install -q -r "${PROJECT_DIR}/python/requirements-uploader.txt"
+        ok "Dependencies installed."
     fi
 fi
 
