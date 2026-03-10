@@ -16,7 +16,31 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${PROJECT_DIR}/python/.env"
 CONFIG_FILE="${PROJECT_DIR}/deploy/upload_config.toml"
 
+# Colors & helpers (required by lib-env.sh)
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+info()  { echo -e "${CYAN}[upload]${NC} $*"; }
+ok()    { echo -e "${GREEN}[upload]${NC} $*"; }
+warn()  { echo -e "${YELLOW}[upload]${NC} $*"; }
+error() { echo -e "${RED}[upload]${NC} $*" >&2; }
+
 source "${SCRIPT_DIR}/lib-env.sh"
+
+# ---------------------------------------------------------------------------
+# 0. Activate Python venv (if not already in one)
+# ---------------------------------------------------------------------------
+if [[ -z "${VIRTUAL_ENV:-}" && -z "${CONDA_PREFIX:-}" ]]; then
+    venv_dir="${PROJECT_DIR}/.venv"
+    if [[ -d "$venv_dir" ]]; then
+        source "${venv_dir}/bin/activate"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 1. Ensure R2 credentials exist
