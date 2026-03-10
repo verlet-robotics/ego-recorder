@@ -18,9 +18,9 @@ Choose based on your needs:
 
 | Need | Script | Time | Includes |
 |------|--------|------|----------|
-| Recording + viewer QC | `./scripts/setup-station.sh` | 2-3 min | `ego-recorder`, `ego-qc` |
-| ML export (RLDS/LeRobot) | `./scripts/setup.sh` | 5+ min | Above + Python + export tools |
-| Full pipeline + cloud upload | `./scripts/setup-pipeline.sh` | (see DEPLOYMENT.md) | Systemd services + uploader |
+| Recording + viewer QC | `./scripts/setup-station.sh` | 2-3 min | `ego-recorder`, `ego-qc` (+ optional R2 config) |
+| ML export (RLDS/LeRobot) | `./scripts/setup.sh` | 5+ min | Above + Python + export tools (+ optional R2 config) |
+| Full pipeline + cloud upload | `./scripts/setup-pipeline.sh` | (see DEPLOYMENT.md) | Systemd services + uploader + R2 setup |
 
 ## Quick start
 
@@ -341,7 +341,7 @@ See `deploy/config.toml.example` for the full TOML config reference.
 ## Next steps
 
 - **Want to review recordings before uploading?** See viewer setup in [DEPLOYMENT.md](DEPLOYMENT.md#viewer)
-- **Want automatic cloud sync?** See [DEPLOYMENT.md](DEPLOYMENT.md#cloud-upload-r2-sync)
+- **Want automatic cloud sync?** See [DEPLOYMENT.md](DEPLOYMENT.md#cloud-upload-r2-sync). All setup scripts can optionally configure R2 credentials and auto-detect your facility server.
 - **Want QC automation (prune idle episodes)?** See [DEPLOYMENT.md](DEPLOYMENT.md#ego-qc-reference)
 - **Deploying to production?** See [DEPLOYMENT.md](DEPLOYMENT.md) for full systemd service setup
 

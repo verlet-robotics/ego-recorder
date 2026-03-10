@@ -77,11 +77,16 @@ Opens a web UI at `http://localhost:4200` with RGB + depth video playback, activ
 ### 6. Upload to cloud (optional)
 
 ```bash
-# Manual one-shot upload
+# Interactive — pick dataset, choose options, upload
+python3 python/ego_uploader.py --config deploy/upload_config.toml -i
+
+# One-shot upload of everything pending
 python3 python/ego_uploader.py --config deploy/upload_config.toml --once
 ```
 
 Or set up automatic upload as a systemd service — see [Cloud upload](#cloud-upload-r2-sync) below.
+
+> R2 credentials can be configured during any setup script (prompted at the end), or manually in `.env`. See [Upload configuration](#upload-configuration).
 
 ---
 
@@ -149,7 +154,7 @@ ego-qc splice ./datasets/pick --replace-original
 
 # 6. Upload (happens automatically if uploader service is running,
 #    or trigger manually)
-python3 python/ego_uploader.py --config deploy/upload_config.toml --once
+python3 python/ego_uploader.py --config deploy/upload_config.toml -i
 ```
 
 > Steps 3-5 assume `ego-qc` is on your PATH. If not, use the full path: `./rust/target/release/ego-qc`.
@@ -270,6 +275,27 @@ sudo ./scripts/setup-pipeline.sh
 
 This builds the recorder and `ego-qc`, installs both to `/usr/local/bin/`, installs both systemd services, sets up Python for the uploader, and prompts for R2 credentials. Both services start on boot.
 
+During setup you'll be prompted to configure R2 credentials. You can either paste an entire `.env` block or enter each credential individually:
+
+```
+  1) Paste a .env block (all credentials at once)
+  2) Enter each credential individually
+  3) Skip (configure later)
+```
+
+The paste option accepts a block like:
+
+```env
+R2_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
+R2_BUCKET=your-bucket-name
+R2_ACCESS_KEY_ID=your-key
+R2_SECRET_ACCESS_KEY=your-secret
+```
+
+The script also auto-detects facility servers on the local network by scanning the /24 subnet for port 8100. If found, it prompts for confirmation; otherwise, you can enter the IP manually or skip.
+
+> **Note:** `setup.sh` and `setup-station.sh` also offer an optional R2 configuration step at the end of their build process ("Configure R2 cloud upload? [y/N]"), so you can configure upload credentials from any setup entry point.
+
 ```bash
 sudo ./scripts/setup-pipeline.sh --no-build      # skip build (binary already compiled)
 sudo ./scripts/setup-pipeline.sh --recorder-only  # skip uploader, recorder only
@@ -289,22 +315,35 @@ The uploader reads from two files:
 | File | Purpose |
 |------|---------|
 | `/etc/ego-recorder/upload_config.toml` | Bucket, prefix, poll interval, facility API |
-| `/etc/ego-recorder/.env` | R2 credentials (`R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) |
+| `/etc/ego-recorder/.env` | R2 credentials (see below) |
+
+**Environment variables** (in `.env`):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `R2_ENDPOINT` | Yes | Cloudflare R2 endpoint URL |
+| `R2_BUCKET` | No | Bucket name (overrides config, default: `ego-data-verlet`) |
+| `R2_ACCESS_KEY_ID` | Yes | R2 access key |
+| `R2_SECRET_ACCESS_KEY` | Yes | R2 secret key |
+| `FACILITY_URL` | No | Facility API URL (alternative to config file) |
+
+> `R2_ENDPOINT_URL` and `R2_BUCKET_NAME` are also accepted as aliases during setup.
 
 Key settings in `upload_config.toml`:
 
 ```toml
 [cloud]
-bucket = "ego-data-verlet"
-prefix = "device-01/"         # optional key prefix per device
+bucket = "ego-data-verlet"       # override via R2_BUCKET env var
+prefix = "device-01/"            # optional key prefix per device
 
 [upload]
 episodes_dir = "/var/lib/ego-recorder/recordings"
-poll_interval_s = 30          # how often to scan for new episodes
-file_settle_s = 10            # skip files modified within this window
+poll_interval_s = 30             # how often to scan for new episodes
+file_settle_s = 10               # skip files modified within this window
+delete_after_upload = false      # delete local .egorec after R2-verified upload
 
 [facility]
-enabled = true                # register episodes with facility server
+enabled = true                   # register episodes with facility server
 url = "http://192.168.1.100:8100"
 dataset_name = "kitchen-01"
 ```
@@ -312,21 +351,34 @@ dataset_name = "kitchen-01"
 #### Running the uploader manually
 
 ```bash
+# Interactive mode — pick dataset, choose options, upload
+python3 python/ego_uploader.py --config deploy/upload_config.toml -i
+
 # Continuous mode (foreground, useful for debugging)
 python3 python/ego_uploader.py --config deploy/upload_config.toml -v
 
 # Single pass (upload everything pending, then exit)
 python3 python/ego_uploader.py --config deploy/upload_config.toml --once
+
+# Upload a specific dataset only
+python3 python/ego_uploader.py --config deploy/upload_config.toml --once --dataset pick
+
+# Upload and delete local files after R2-verified upload
+python3 python/ego_uploader.py --config deploy/upload_config.toml --once --delete
 ```
+
+Interactive mode (`-i`) discovers datasets in the recordings directory, shows pending episode counts and sizes, and lets you select which dataset to upload with an option to delete local files after verified upload.
 
 #### How the uploader works
 
 - Scans `episodes_dir` for `.egorec` files not yet in `.upload_manifest.json`
 - Skips files in `.pruned/` directories and files still being written
 - Checks network connectivity before each upload (3-tier: nmcli, sysfs, ip route)
-- Uploads one-by-one to R2 via boto3 with SHA-256 verification
+- Uploads via boto3 multipart with progress logging (speed, ETA, percentage)
+- SHA-256 checksums computed before upload for verification
 - Retries with exponential backoff (capped at 5 minutes), resets on reconnect
 - If facility mode is enabled, registers each episode with the facility API so it appears in the manager dashboard
+- If `delete_after_upload` is enabled, verifies the object exists on R2 (head_object size check) before deleting the local file
 
 #### Upload manifest
 
