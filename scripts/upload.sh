@@ -39,7 +39,11 @@ source "${SCRIPT_DIR}/lib-env.sh"
 venv_dir="${PROJECT_DIR}/.venv"
 if [[ ! -d "$venv_dir" ]]; then
     info "Creating Python venv at ${venv_dir}..."
-    python3 -m venv "$venv_dir"
+    if ! python3 -m venv "$venv_dir" 2>/dev/null; then
+        warn "python3-venv not installed. Installing..."
+        sudo apt-get install -y python3-venv
+        python3 -m venv "$venv_dir"
+    fi
 fi
 source "${venv_dir}/bin/activate"
 
