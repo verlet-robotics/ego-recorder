@@ -36,6 +36,7 @@ err()   { echo -e "${RED}[setup]${NC} $*" >&2; }
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${SCRIPT_DIR}/lib-env.sh"
 BUILD_DIR="${PROJECT_DIR}/build"
 WITH_GUI=ON
 WITH_PYTHON=ON
@@ -523,6 +524,21 @@ deploy_systemd() {
 }
 
 # ---------------------------------------------------------------------------
+# 7. Cloud upload configuration (optional)
+# ---------------------------------------------------------------------------
+setup_upload_config() {
+    echo ""
+    read -rp "Configure R2 cloud upload for recordings? [y/N] " ans
+    if [[ ! "$ans" =~ ^[Yy] ]]; then
+        return 0
+    fi
+
+    local env_file="${PROJECT_DIR}/python/.env"
+    prompt_r2_credentials "$env_file" || true
+    setup_facility "$env_file" || true
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
@@ -544,6 +560,7 @@ main() {
     run_tests
     install_python_export
     deploy_systemd
+    setup_upload_config
 
     echo ""
     echo -e "${BOLD}═══════════════════════════════════════${NC}"

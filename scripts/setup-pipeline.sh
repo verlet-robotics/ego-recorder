@@ -38,6 +38,7 @@ err()   { echo -e "${RED}[setup]${NC} $*" >&2; }
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RECORDER_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+source "${SCRIPT_DIR}/lib-env.sh"
 BUILD_DIR="${RECORDER_DIR}/build"
 NPROC=$(nproc 2>/dev/null || echo 4)
 
@@ -369,72 +370,12 @@ if [[ "$DO_UPLOAD" == true ]]; then
     # 2c. R2 credentials (.env)
     # ------------------------------------------------------------------
     ENV_FILE="${CONF_DIR}/.env"
-    if [[ -f "${ENV_FILE}" ]]; then
-        info ".env already exists at ${ENV_FILE} -- preserving."
-    else
-        echo ""
-        echo -e "${BOLD}R2 credentials setup${NC}"
-        echo "─────────────────────────────────────"
-        echo ""
-        echo "The uploader needs Cloudflare R2 credentials to sync episodes."
-        echo "These will be stored in ${ENV_FILE} (root-readable only)."
-        echo ""
-
-        read -rp "R2 Endpoint URL (e.g. https://<id>.r2.cloudflarestorage.com): " R2_ENDPOINT
-        read -rp "R2 Access Key ID: " R2_ACCESS_KEY_ID
-        read -rsp "R2 Secret Access Key: " R2_SECRET_ACCESS_KEY
-        echo ""
-
-        if [[ -z "${R2_ENDPOINT}" || -z "${R2_ACCESS_KEY_ID}" || -z "${R2_SECRET_ACCESS_KEY}" ]]; then
-            warn "One or more R2 credentials are empty."
-            warn "You can fill them in later: ${ENV_FILE}"
-        fi
-
-        cat > "${ENV_FILE}" <<ENVEOF
-R2_ENDPOINT=${R2_ENDPOINT}
-R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
-R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
-ENVEOF
-        chmod 600 "${ENV_FILE}"
-        chown root:root "${ENV_FILE}"
-        ok "R2 credentials saved to ${ENV_FILE}"
-    fi
+    prompt_r2_credentials "${ENV_FILE}" || true
 
     # ------------------------------------------------------------------
-    # 2c-2. Facility API connection
+    # 2c-2. Facility API connection (with auto-detection)
     # ------------------------------------------------------------------
-    echo ""
-    echo -e "${BOLD}Facility API setup${NC}"
-    echo "─────────────────────────────────────"
-    echo ""
-    echo "The uploader can register episodes with a facility server so they"
-    echo "appear in the manager dashboard. This requires a facility server"
-    echo "running on the local network."
-    echo ""
-    read -rp "Facility server IP or URL (leave empty to skip): " FACILITY_INPUT
-
-    if [[ -n "${FACILITY_INPUT}" ]]; then
-        # Normalize: add http:// and :8100 if not provided
-        if [[ "${FACILITY_INPUT}" != http://* && "${FACILITY_INPUT}" != https://* ]]; then
-            FACILITY_INPUT="http://${FACILITY_INPUT}"
-        fi
-        if [[ "${FACILITY_INPUT}" != *:[0-9]* ]]; then
-            FACILITY_INPUT="${FACILITY_INPUT}:8100"
-        fi
-
-        read -rp "Dataset name (default: $(hostname)): " FACILITY_DS_NAME
-        FACILITY_DS_NAME="${FACILITY_DS_NAME:-$(hostname)}"
-
-        # Patch upload_config.toml
-        sed -i "s|^enabled = .*|enabled = true|"          "${CONF_DIR}/upload_config.toml"
-        sed -i "s|^url = .*|url = \"${FACILITY_INPUT}\"|" "${CONF_DIR}/upload_config.toml"
-        sed -i "s|^dataset_name = .*|dataset_name = \"${FACILITY_DS_NAME}\"|" "${CONF_DIR}/upload_config.toml"
-
-        ok "Facility configured: ${FACILITY_INPUT} (dataset: ${FACILITY_DS_NAME})"
-    else
-        info "Skipping facility setup. Episodes will upload to R2 but won't appear in the dashboard."
-        info "You can configure this later: ${CONF_DIR}/upload_config.toml"
-    fi
+    setup_facility "${ENV_FILE}" "${CONF_DIR}/upload_config.toml" || true
 
     # ------------------------------------------------------------------
     # 2d. Install ego-uploader systemd service

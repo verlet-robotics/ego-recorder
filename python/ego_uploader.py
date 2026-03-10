@@ -28,6 +28,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ except ModuleNotFoundError:
     import tomli as tomllib  # Python < 3.11
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import (
     BotoCoreError,
@@ -78,6 +80,10 @@ class UploadCfg:
     poll_interval_s: int = 30
     file_settle_s: int = 10
     connectivity_timeout_s: int = 5
+    progress_interval_s: int = 10          # How often to log upload progress
+    multipart_chunksize_mb: int = 32       # Multipart upload chunk size
+    max_concurrency: int = 4               # Parallel upload threads
+    delete_after_upload: bool = False       # Delete local file after verified upload
 
 
 @dataclass
@@ -120,7 +126,9 @@ def load_config(path: Path) -> AppConfig:
 
         upload = raw.get("upload", {})
         for k in ("episodes_dir", "poll_interval_s",
-                  "file_settle_s", "connectivity_timeout_s"):
+                  "file_settle_s", "connectivity_timeout_s",
+                  "progress_interval_s", "multipart_chunksize_mb",
+                  "max_concurrency", "delete_after_upload"):
             if k in upload:
                 setattr(cfg.upload, k, upload[k])
 
@@ -133,6 +141,7 @@ def load_config(path: Path) -> AppConfig:
     cfg.cloud.endpoint          = os.environ.get("R2_ENDPOINT", cfg.cloud.endpoint)
     cfg.cloud.access_key_id     = os.environ.get("R2_ACCESS_KEY_ID", cfg.cloud.access_key_id)
     cfg.cloud.secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY", cfg.cloud.secret_access_key)
+    cfg.cloud.bucket            = os.environ.get("R2_BUCKET", cfg.cloud.bucket)
 
     # Facility URL from env
     if os.environ.get("FACILITY_URL"):
@@ -434,8 +443,12 @@ def scan_pending_episodes(
     episodes_dir: Path,
     manifest: ManifestStore,
     settle_s: int,
+    subdirectory: Optional[str] = None,
 ) -> list[PendingFile]:
-    """Scan episodes_dir for .egorec files not yet uploaded."""
+    """Scan episodes_dir for .egorec files not yet uploaded.
+
+    If subdirectory is given, only scan that subdirectory (dataset name).
+    """
     uploaded = manifest.uploaded_files
     now = time.time()
     pending: list[PendingFile] = []
@@ -443,7 +456,11 @@ def scan_pending_episodes(
     if not episodes_dir.exists():
         return pending
 
-    for path in sorted(episodes_dir.rglob("*.egorec")):
+    scan_root = episodes_dir / subdirectory if subdirectory else episodes_dir
+    if not scan_root.exists():
+        return pending
+
+    for path in sorted(scan_root.rglob("*.egorec")):
         if not path.is_file():
             continue
 
@@ -490,15 +507,157 @@ def scan_pending_episodes(
 # SHA-256 helper
 # ---------------------------------------------------------------------------
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, label: str = "") -> str:
+    """Compute SHA-256 of a file with progress logging for large files."""
+    file_size = path.stat().st_size
     h = hashlib.sha256()
+    bytes_read = 0
+    start = time.monotonic()
+    last_log = start
+
     with open(path, "rb") as f:
         while True:
-            chunk = f.read(65536)
+            chunk = f.read(1 << 20)  # 1 MB chunks
             if not chunk:
                 break
             h.update(chunk)
-    return h.hexdigest()
+            bytes_read += len(chunk)
+
+            now = time.monotonic()
+            if now - last_log >= 5.0 and file_size > 100 * 1024 * 1024:  # log every 5s for >100MB
+                pct = (bytes_read / file_size) * 100 if file_size else 0
+                speed = bytes_read / (now - start) / (1024 * 1024)
+                log.info(
+                    "  ↳ checksumming %s: %.1f%% (%.0f MB/s)",
+                    label or path.name, pct, speed,
+                )
+                last_log = now
+
+    elapsed = time.monotonic() - start
+    speed = bytes_read / elapsed / (1024 * 1024) if elapsed > 0 else 0
+    hexdigest = h.hexdigest()
+    log.info(
+        "Checksum complete: %s sha256=%s…  (%.1f MB in %.1fs, %.0f MB/s disk read)",
+        label or path.name, hexdigest[:16],
+        bytes_read / (1024 * 1024), elapsed, speed,
+    )
+    return hexdigest
+
+
+# ---------------------------------------------------------------------------
+# Upload progress tracker
+# ---------------------------------------------------------------------------
+
+def _fmt_size(b: float) -> str:
+    """Human-readable file size."""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(b) < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} PB"
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human-readable duration."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    m, s = divmod(int(seconds), 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m {s:02d}s"
+
+
+class UploadProgressTracker:
+    """boto3 upload Callback that logs bandwidth, speed, ETA, and progress."""
+
+    def __init__(self, filename: str, total_bytes: int, log_interval_s: int = 10):
+        self._filename = filename
+        self._total = total_bytes
+        self._log_interval = log_interval_s
+        self._lock = threading.Lock()
+        self._bytes_transferred = 0
+        self._start = time.monotonic()
+        self._last_log_time = self._start
+        self._last_log_bytes = 0
+
+    def __call__(self, bytes_amount: int) -> None:
+        with self._lock:
+            self._bytes_transferred += bytes_amount
+            now = time.monotonic()
+            since_last = now - self._last_log_time
+
+            if since_last >= self._log_interval:
+                self._log_progress(now)
+
+    def _log_progress(self, now: float) -> None:
+        elapsed = now - self._start
+        transferred = self._bytes_transferred
+        total = self._total
+
+        pct = (transferred / total * 100) if total > 0 else 0
+        avg_speed = transferred / elapsed if elapsed > 0 else 0
+
+        # Current interval speed
+        interval_bytes = transferred - self._last_log_bytes
+        interval_time = now - self._last_log_time
+        cur_speed = interval_bytes / interval_time if interval_time > 0 else avg_speed
+
+        # ETA based on average speed
+        remaining_bytes = total - transferred
+        eta_s = remaining_bytes / avg_speed if avg_speed > 0 else 0
+
+        log.info(
+            "  ↳ %5.1f%% | %s / %s | %s/s cur, %s/s avg | ETA %s",
+            pct,
+            _fmt_size(transferred), _fmt_size(total),
+            _fmt_size(cur_speed), _fmt_size(avg_speed),
+            _fmt_duration(eta_s),
+        )
+
+        self._last_log_time = now
+        self._last_log_bytes = transferred
+
+    def finish_summary(self) -> tuple[float, float]:
+        """Log final summary. Returns (elapsed_s, avg_speed_bytes_per_s)."""
+        elapsed = time.monotonic() - self._start
+        avg_speed = self._bytes_transferred / elapsed if elapsed > 0 else 0
+        log.info(
+            "✓ Uploaded %s — %s in %s (%s/s avg)",
+            self._filename,
+            _fmt_size(self._bytes_transferred),
+            _fmt_duration(elapsed),
+            _fmt_size(avg_speed),
+        )
+        return elapsed, avg_speed
+
+
+class SessionStats:
+    """Tracks cumulative upload statistics for a poll cycle."""
+
+    def __init__(self):
+        self.files_uploaded: int = 0
+        self.total_bytes: int = 0
+        self.total_elapsed: float = 0.0
+        self.start_time: float = time.monotonic()
+
+    def record(self, size_bytes: int, elapsed_s: float) -> None:
+        self.files_uploaded += 1
+        self.total_bytes += size_bytes
+        self.total_elapsed += elapsed_s
+
+    def log_summary(self) -> None:
+        if self.files_uploaded == 0:
+            return
+        wall_time = time.monotonic() - self.start_time
+        avg_speed = self.total_bytes / self.total_elapsed if self.total_elapsed > 0 else 0
+        log.info(
+            "── Upload cycle complete: %d file(s), %s total, %s wall time, %s/s avg ──",
+            self.files_uploaded,
+            _fmt_size(self.total_bytes),
+            _fmt_duration(wall_time),
+            _fmt_size(avg_speed),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +680,16 @@ def make_s3_client(cloud: CloudCfg):
     )
 
 
+def make_transfer_config(upload_cfg: UploadCfg) -> TransferConfig:
+    """Build boto3 TransferConfig tuned for large .egorec files."""
+    return TransferConfig(
+        multipart_chunksize=upload_cfg.multipart_chunksize_mb * 1024 * 1024,
+        max_concurrency=upload_cfg.max_concurrency,
+        multipart_threshold=upload_cfg.multipart_chunksize_mb * 1024 * 1024,
+        use_threads=True,
+    )
+
+
 def make_object_key(prefix: str, rel_path: str) -> str:
     key = prefix
     if key and not key.endswith("/"):
@@ -534,19 +703,59 @@ def upload_file(
     bucket: str,
     pending: PendingFile,
     object_key: str,
-) -> bool:
-    """Upload a single file to R2. Returns True on success."""
+    transfer_config: TransferConfig,
+    progress_interval_s: int = 10,
+) -> tuple[bool, float]:
+    """Upload a single file to R2 with progress tracking.
+
+    Returns (success, elapsed_seconds).
+    """
+    tracker = UploadProgressTracker(
+        filename=pending.rel_path,
+        total_bytes=pending.size_bytes,
+        log_interval_s=progress_interval_s,
+    )
     try:
         s3_client.upload_file(
             str(pending.abs_path),
             bucket,
             object_key,
             ExtraArgs={"ContentType": "application/octet-stream"},
+            Config=transfer_config,
+            Callback=tracker,
         )
-        return True
+        elapsed, _ = tracker.finish_summary()
+        return True, elapsed
     except (BotoCoreError, ClientError, ConnectionClosedError,
             EndpointConnectionError, OSError) as e:
         log.error("Upload failed for %s: %s", pending.rel_path, e)
+        return False, 0.0
+
+
+def verify_upload_on_r2(
+    s3_client,
+    bucket: str,
+    object_key: str,
+    expected_size: int,
+) -> bool:
+    """Verify an object exists in R2 with the expected size via head_object."""
+    try:
+        resp = s3_client.head_object(Bucket=bucket, Key=object_key)
+        remote_size = resp.get("ContentLength", 0)
+        if remote_size == expected_size:
+            log.info(
+                "R2 verification passed: %s (%s)",
+                object_key, _fmt_size(remote_size),
+            )
+            return True
+        else:
+            log.error(
+                "R2 verification FAILED: %s — expected %s, got %s",
+                object_key, _fmt_size(expected_size), _fmt_size(remote_size),
+            )
+            return False
+    except (BotoCoreError, ClientError) as e:
+        log.error("R2 verification error for %s: %s", object_key, e)
         return False
 
 
@@ -564,7 +773,7 @@ def _handle_signal(signum, _frame):
     _shutdown = True
 
 
-def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
+def upload_loop(cfg: AppConfig, *, once: bool = False, dataset_filter: Optional[str] = None) -> None:
     global _shutdown
 
     episodes_dir = Path(cfg.upload.episodes_dir)
@@ -577,6 +786,11 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
         "Starting uploader (dir=%s, bucket=%s, prefix=%s, %d already uploaded)",
         episodes_dir, cfg.cloud.bucket, cfg.cloud.prefix or "(none)",
         manifest.uploaded_count,
+    )
+    log.info(
+        "Upload config: multipart=%dMB, concurrency=%d, progress_interval=%ds, delete_after_upload=%s",
+        cfg.upload.multipart_chunksize_mb, cfg.upload.max_concurrency,
+        cfg.upload.progress_interval_s, cfg.upload.delete_after_upload,
     )
 
     # Facility API client (managed upload flow)
@@ -601,6 +815,7 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
         log.info("Facility mode enabled: %s", cfg.facility.url)
 
     s3_client: Optional[object] = None
+    transfer_config: Optional[TransferConfig] = None
 
     # Per-file retry tracking: rel_path -> (attempts, last_attempt_time)
     retry_state: dict[str, tuple[int, float]] = {}
@@ -639,6 +854,7 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
         if s3_client is None:
             try:
                 s3_client = make_s3_client(cfg.cloud)
+                transfer_config = make_transfer_config(cfg.upload)
                 # Validate credentials with a lightweight call
                 s3_client.head_bucket(Bucket=cfg.cloud.bucket)
                 log.info("Connected to R2 bucket: %s", cfg.cloud.bucket)
@@ -656,9 +872,16 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
         # Scan for pending episodes
         pending = scan_pending_episodes(
             episodes_dir, manifest, cfg.upload.file_settle_s,
+            subdirectory=dataset_filter,
         )
         if pending:
-            log.info("Found %d pending episode(s) to upload.", len(pending))
+            total_size = sum(pf.size_bytes for pf in pending)
+            log.info(
+                "Found %d pending episode(s) to upload (%s total)",
+                len(pending), _fmt_size(total_size),
+            )
+
+        session = SessionStats()
 
         for pf in pending:
             if _shutdown:
@@ -702,19 +925,30 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
                 object_key = make_object_key(cfg.cloud.prefix, pf.rel_path)
 
             prev_attempts = retry_state.get(pf.rel_path, (0, 0))[0]
+
+            # Pre-compute SHA-256 before upload
             log.info(
-                "Uploading %s (%.1f MB, attempt %d) -> %s/%s",
+                "Preparing %s (%s, attempt %d) -> %s/%s",
                 pf.rel_path,
-                pf.size_bytes / (1024 * 1024),
+                _fmt_size(pf.size_bytes),
                 prev_attempts + 1,
                 cfg.cloud.bucket,
                 object_key,
             )
+            checksum = sha256_file(pf.abs_path, label=pf.rel_path)
 
-            success = upload_file(s3_client, cfg.cloud.bucket, pf, object_key)
+            log.info(
+                "Uploading %s (%s)...",
+                pf.rel_path, _fmt_size(pf.size_bytes),
+            )
+
+            success, elapsed = upload_file(
+                s3_client, cfg.cloud.bucket, pf, object_key,
+                transfer_config=transfer_config,
+                progress_interval_s=cfg.upload.progress_interval_s,
+            )
 
             if success:
-                checksum = sha256_file(pf.abs_path)
                 retry_state.pop(pf.rel_path, None)
                 rec = UploadRecord(
                     filename=pf.rel_path,
@@ -726,25 +960,43 @@ def upload_loop(cfg: AppConfig, *, once: bool = False) -> None:
                     success=True,
                 )
                 manifest.record_success(rec)
+                session.record(pf.size_bytes, elapsed)
 
                 # Notify facility of upload completion
                 if facility and episode_id:
                     facility.complete_episode(episode_id, checksum, pf.size_bytes)
 
-                log.info(
-                    "Uploaded %s (sha256=%s...)",
-                    pf.rel_path, checksum[:12],
-                )
+                # Verified delete: confirm the object exists on R2 before deleting locally
+                if cfg.upload.delete_after_upload:
+                    if verify_upload_on_r2(s3_client, cfg.cloud.bucket, object_key, pf.size_bytes):
+                        try:
+                            pf.abs_path.unlink()
+                            log.info(
+                                "Deleted local file after R2-verified upload: %s",
+                                pf.rel_path,
+                            )
+                        except OSError as e:
+                            log.error(
+                                "Failed to delete local file %s: %s",
+                                pf.rel_path, e,
+                            )
+                    else:
+                        log.warning(
+                            "Keeping local file %s -- R2 verification failed, will NOT delete.",
+                            pf.rel_path,
+                        )
             else:
                 new_attempts = prev_attempts + 1
                 retry_state[pf.rel_path] = (new_attempts, time.time())
                 next_backoff = min((2 ** new_attempts) * 10, MAX_BACKOFF_S)
                 log.warning(
-                    "Failed upload attempt %d for %s (next retry in %ds)",
-                    new_attempts, pf.rel_path, next_backoff,
+                    "Failed upload attempt %d for %s (next retry in %s)",
+                    new_attempts, pf.rel_path, _fmt_duration(next_backoff),
                 )
                 # Re-create client on failure (connection may be stale)
                 s3_client = None
+
+        session.log_summary()
 
         if once:
             log.info("--once mode: scan complete, exiting.")
@@ -767,6 +1019,242 @@ def _interruptible_sleep(seconds: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dataset discovery (for interactive mode)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DatasetInfo:
+    """Summary of a discovered dataset in the episodes directory."""
+    name: str
+    path: Path
+    episode_count: int = 0
+    pending_count: int = 0
+    total_size: int = 0
+    pending_size: int = 0
+    description: str = ""
+
+
+def discover_datasets(
+    episodes_dir: Path,
+    manifest: ManifestStore,
+    settle_s: int,
+) -> list[DatasetInfo]:
+    """Find dataset subdirectories (those with dataset.json) and summarize each."""
+    datasets: list[DatasetInfo] = []
+    if not episodes_dir.exists():
+        return datasets
+
+    for child in sorted(episodes_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        ds_json = child / "dataset.json"
+        if not ds_json.exists():
+            continue
+
+        info = DatasetInfo(name=child.name, path=child)
+
+        # Read dataset.json for metadata
+        try:
+            with open(ds_json) as f:
+                meta = json.load(f)
+            info.description = meta.get("description", "")
+            info.episode_count = len(meta.get("episodes", []))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        # Count all .egorec files and pending ones
+        all_egorec = list(child.rglob("*.egorec"))
+        for ef in all_egorec:
+            if not ef.is_file() or ".pruned" in ef.parts:
+                continue
+            try:
+                st = ef.stat()
+            except OSError:
+                continue
+            info.total_size += st.st_size
+
+        # Get pending files for this dataset
+        pending = scan_pending_episodes(
+            episodes_dir, manifest, settle_s, subdirectory=child.name,
+        )
+        info.pending_count = len(pending)
+        info.pending_size = sum(pf.size_bytes for pf in pending)
+
+        datasets.append(info)
+
+    return datasets
+
+
+# ---------------------------------------------------------------------------
+# Interactive upload mode
+# ---------------------------------------------------------------------------
+
+BOLD = "\033[1m"
+CYAN = "\033[0;36m"
+GREEN = "\033[0;32m"
+YELLOW = "\033[1;33m"
+DIM = "\033[2m"
+RED = "\033[0;31m"
+NC = "\033[0m"
+
+
+def interactive_upload(cfg: AppConfig) -> None:
+    """Interactive upload session: pick dataset, choose delete, upload."""
+    episodes_dir = Path(cfg.upload.episodes_dir)
+    if not episodes_dir.exists():
+        print(f"{RED}Episodes directory does not exist: {episodes_dir}{NC}")
+        sys.exit(1)
+
+    manifest = ManifestStore(str(episodes_dir))
+
+    print()
+    print(f"{BOLD}ego-uploader{NC} — interactive mode")
+    print("───────────────────────────────────")
+    print(f"  Directory:       {DIM}{episodes_dir}{NC}")
+    print(f"  Bucket:          {BOLD}{cfg.cloud.bucket}{NC}")
+    print(f"  Prefix:          {DIM}{cfg.cloud.prefix or '(none)'}{NC}")
+    print(f"  Already uploaded: {manifest.uploaded_count} file(s)")
+    print()
+
+    # Discover datasets
+    print(f"{DIM}Scanning for datasets...{NC}")
+    datasets = discover_datasets(
+        episodes_dir, manifest, cfg.upload.file_settle_s,
+    )
+
+    if not datasets:
+        print(f"{YELLOW}No datasets found in {episodes_dir}{NC}")
+        print(f"{DIM}(Datasets must contain a dataset.json manifest){NC}")
+        sys.exit(0)
+
+    # Also check for loose .egorec files not in any dataset
+    all_pending = scan_pending_episodes(
+        episodes_dir, manifest, cfg.upload.file_settle_s,
+    )
+    dataset_pending = sum(ds.pending_count for ds in datasets)
+    loose_pending = len(all_pending) - dataset_pending
+
+    # Display dataset menu
+    print(f"{BOLD}Datasets:{NC}")
+    print()
+    total_pending = 0
+    total_pending_size = 0
+    for i, ds in enumerate(datasets, 1):
+        pending_label = (
+            f"{GREEN}{ds.pending_count} pending ({_fmt_size(ds.pending_size)}){NC}"
+            if ds.pending_count > 0
+            else f"{DIM}0 pending{NC}"
+        )
+        desc_label = f"  {DIM}{ds.description}{NC}" if ds.description else ""
+        print(
+            f"  {CYAN}{i}){NC} {BOLD}{ds.name}{NC}"
+            f"  — {ds.episode_count} episode(s), {pending_label}{desc_label}"
+        )
+        total_pending += ds.pending_count
+        total_pending_size += ds.pending_size
+
+    print()
+    if loose_pending > 0:
+        print(f"  {DIM}+ {loose_pending} loose .egorec file(s) not in any dataset{NC}")
+    print(f"  {CYAN}A){NC} {BOLD}All datasets{NC}  — {total_pending} pending ({_fmt_size(total_pending_size)}")
+    if loose_pending > 0:
+        print(f"  {CYAN}L){NC} {BOLD}All (including loose files){NC}  — {len(all_pending)} pending")
+    print()
+
+    # Get selection
+    choice = input("Select dataset (number, A=all, L=loose+all, q=quit): ").strip()
+
+    if choice.lower() in ("q", "quit", "exit"):
+        print("Cancelled.")
+        return
+
+    selected_name: Optional[str] = None  # None = all datasets
+    include_loose = False
+
+    if choice.lower() == "a":
+        # Upload all datasets (but not loose files)
+        selected_name = None
+    elif choice.lower() == "l":
+        # Upload everything (all datasets + loose files)
+        selected_name = None
+        include_loose = True
+    elif choice.isdigit():
+        idx = int(choice) - 1
+        if 0 <= idx < len(datasets):
+            selected_name = datasets[idx].name
+        else:
+            print(f"{RED}Invalid selection.{NC}")
+            return
+    else:
+        # Try matching by name
+        matches = [ds for ds in datasets if ds.name.lower() == choice.lower()]
+        if matches:
+            selected_name = matches[0].name
+        else:
+            print(f"{RED}No dataset matching '{choice}'.{NC}")
+            return
+
+    # Get pending count for selection
+    if selected_name:
+        sel_ds = next(ds for ds in datasets if ds.name == selected_name)
+        sel_pending = sel_ds.pending_count
+        sel_size = sel_ds.pending_size
+    elif include_loose:
+        sel_pending = len(all_pending)
+        sel_size = sum(pf.size_bytes for pf in all_pending)
+    else:
+        sel_pending = total_pending
+        sel_size = total_pending_size
+
+    if sel_pending == 0:
+        print(f"\n{GREEN}Nothing to upload — all episodes are already synced.{NC}")
+        return
+
+    # Ask about delete-after-upload
+    print()
+    print(f"{BOLD}Delete local files after upload?{NC}")
+    print(f"  {DIM}Files are only deleted after R2 verification (head_object size check).{NC}")
+    print(f"  {CYAN}1){NC} {BOLD}No{NC}  — keep local files {DIM}(default){NC}")
+    print(f"  {CYAN}2){NC} {BOLD}Yes{NC} — delete after verified upload")
+    print()
+    delete_choice = input("Choice [1]: ").strip()
+    delete_after = delete_choice == "2"
+
+    # Confirmation
+    dataset_label = selected_name or ("all (+ loose)" if include_loose else "all datasets")
+    print()
+    print("───────────────────────────────────")
+    print(f"  Dataset:    {BOLD}{dataset_label}{NC}")
+    print(f"  Pending:    {BOLD}{sel_pending} file(s) ({_fmt_size(sel_size)}){NC}")
+    print(f"  Bucket:     {BOLD}{cfg.cloud.bucket}{NC}")
+    print(f"  Delete:     {BOLD}{'Yes (R2-verified)' if delete_after else 'No'}{NC}")
+    print("───────────────────────────────────")
+    print()
+
+    confirm = input(f"Start upload? [Y/n] ").strip()
+    if confirm.lower().startswith("n"):
+        print("Cancelled.")
+        return
+
+    # Apply settings and run
+    cfg.upload.delete_after_upload = delete_after
+
+    # For a single dataset, set the filter.
+    # For "all datasets" without loose files, we process each dataset.
+    # For "all + loose", we upload everything (no filter).
+    if include_loose:
+        dataset_filter = None
+    elif selected_name:
+        dataset_filter = selected_name
+    else:
+        # "All datasets" — upload everything in the episodes_dir
+        dataset_filter = None
+
+    print()
+    upload_loop(cfg, once=True, dataset_filter=dataset_filter)
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -786,6 +1274,22 @@ def main() -> None:
         help="Run a single scan+upload pass then exit",
     )
     parser.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="Interactive mode: choose dataset, delete behavior, then upload",
+    )
+    parser.add_argument(
+        "--dataset", "-d",
+        type=str,
+        default=None,
+        help="Upload only this dataset subdirectory (non-interactive)",
+    )
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Delete local files after R2-verified upload (overrides config)",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable debug logging",
@@ -800,6 +1304,10 @@ def main() -> None:
 
     cfg = load_config(args.config)
 
+    # CLI overrides
+    if args.delete:
+        cfg.upload.delete_after_upload = True
+
     # Validate required config
     if not cfg.cloud.endpoint:
         log.error("R2_ENDPOINT not set in .env file. Exiting.")
@@ -811,7 +1319,10 @@ def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    upload_loop(cfg, once=args.once)
+    if args.interactive:
+        interactive_upload(cfg)
+    else:
+        upload_loop(cfg, once=args.once, dataset_filter=args.dataset)
 
 
 if __name__ == "__main__":

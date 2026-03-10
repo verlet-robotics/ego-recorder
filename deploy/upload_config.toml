@@ -5,7 +5,7 @@
 # R2_SECRET_ACCESS_KEY). Do NOT put secrets in this file.
 
 [cloud]
-bucket = "ego-data-verlet"
+bucket = "ego-data-verlet"       # Override via R2_BUCKET env var
 region = "auto"                  # R2 uses "auto"
 prefix = ""                      # Optional key prefix (e.g. "device-01/")
 
@@ -14,6 +14,10 @@ episodes_dir = "/var/lib/ego-recorder"   # Where ego-recorder writes .egorec fil
 poll_interval_s = 30                     # How often to scan for new episodes
 file_settle_s = 10                       # Skip files modified within this many seconds
 connectivity_timeout_s = 5               # HTTP probe timeout
+progress_interval_s = 10                 # How often to log upload progress (seconds)
+multipart_chunksize_mb = 32              # Multipart upload chunk size (MB)
+max_concurrency = 4                      # Parallel upload threads for multipart
+delete_after_upload = false              # Delete local .egorec after R2-verified upload
 
 # Facility API integration (managed upload flow).
 # When enabled, episodes are registered with the facility API before upload,
