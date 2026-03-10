@@ -37,19 +37,32 @@ source "${SCRIPT_DIR}/lib-env.sh"
 # 0. Ensure Python venv with uploader deps
 # ---------------------------------------------------------------------------
 venv_dir="${PROJECT_DIR}/.venv"
-if [[ ! -d "$venv_dir" ]]; then
+
+# Create venv if activate script is missing (handles incomplete venvs too)
+if [[ ! -f "${venv_dir}/bin/activate" ]]; then
+    # Clean up any incomplete venv
+    [[ -d "$venv_dir" ]] && rm -rf "$venv_dir"
+
     info "Creating Python venv at ${venv_dir}..."
-    if ! python3 -m venv "$venv_dir" 2>/dev/null; then
+    if ! python3 -m venv "$venv_dir" || [[ ! -f "${venv_dir}/bin/activate" ]]; then
         warn "python3-venv not installed. Installing..."
         sudo apt-get install -y python3-venv
+        rm -rf "$venv_dir"
         python3 -m venv "$venv_dir"
     fi
+
+    if [[ ! -f "${venv_dir}/bin/activate" ]]; then
+        error "Failed to create Python venv. Install python3-venv manually."
+        exit 1
+    fi
 fi
+
+# shellcheck disable=SC1091
 source "${venv_dir}/bin/activate"
 
 if ! python3 -c "import boto3" 2>/dev/null; then
     info "Installing uploader dependencies..."
-    pip install -q -r "${PROJECT_DIR}/python/requirements-uploader.txt"
+    "${venv_dir}/bin/pip" install -q -r "${PROJECT_DIR}/python/requirements-uploader.txt"
     ok "Dependencies installed."
 fi
 
