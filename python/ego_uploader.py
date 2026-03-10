@@ -672,9 +672,9 @@ def make_s3_client(cloud: CloudCfg):
         aws_secret_access_key=cloud.secret_access_key,
         region_name=cloud.region,
         config=BotoConfig(
-            retries={"max_attempts": 0},  # We handle retries ourselves
+            retries={"max_attempts": 5, "mode": "adaptive"},
             connect_timeout=30,
-            read_timeout=120,
+            read_timeout=300,
             tcp_keepalive=True,
         ),
     )
