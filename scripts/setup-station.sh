@@ -365,13 +365,13 @@ if [[ "$INSTALL_SYSTEMD" == true ]]; then
     echo "  Service installed. Next steps:"
     echo "    1. Edit /etc/ego-recorder/config.toml"
     echo "    2. systemctl enable --now ego-recorder.service"
-elif [[ "$WITH_GUI" == "ON" ]]; then
-    echo "  Run: ${BUILD_DIR}/ego-recorder -s my_session -o ./recordings"
 else
-    echo "  Run: ${BUILD_DIR}/ego-recorder --headless -o ./recordings -d 300"
+    echo "  Record:  ./scripts/record.sh"
+    echo "  Upload:  ./scripts/upload.sh"
+    echo "  Viewer:  ./scripts/viewer.sh"
 fi
 echo ""
 echo "  QC usage:"
-echo "    ${RUST_DIR}/target/release/ego-qc analyze ./recordings"
-echo "    ${RUST_DIR}/target/release/ego-qc prune --apply ./recordings"
+echo "    ${RUST_DIR}/target/release/ego-qc analyze datasets/"
+echo "    ${RUST_DIR}/target/release/ego-qc prune --apply datasets/"
 echo ""

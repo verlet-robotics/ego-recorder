@@ -574,11 +574,9 @@ main() {
     fi
     echo ""
     echo -e "  ${BOLD}Quick start:${NC}"
-    if [[ "$WITH_GUI" == "ON" ]]; then
-        echo "    ${BUILD_DIR}/ego-recorder -s my_session -o ./recordings"
-    else
-        echo "    ${BUILD_DIR}/ego-recorder --headless -o ./recordings -d 300"
-    fi
+    echo "    Record:  ./scripts/record.sh"
+    echo "    Upload:  ./scripts/upload.sh"
+    echo "    Viewer:  ./scripts/viewer.sh"
     echo ""
     echo "  See README.md for full usage."
     echo ""
