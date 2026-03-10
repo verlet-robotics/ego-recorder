@@ -1098,39 +1098,67 @@ RED = "\033[0;31m"
 NC = "\033[0m"
 
 
+def _collect_scan_dirs(cfg_episodes_dir: Path) -> list[Path]:
+    """Return deduplicated list of directories to scan for datasets.
+
+    Always includes the configured episodes_dir.  Also includes the local
+    ``datasets/`` directory next to the source tree (if it exists and is
+    different from episodes_dir).
+    """
+    dirs: list[Path] = []
+    if cfg_episodes_dir.exists():
+        dirs.append(cfg_episodes_dir.resolve())
+
+    local_datasets = (Path(__file__).parent.parent / "datasets").resolve()
+    if local_datasets.exists() and local_datasets not in dirs:
+        dirs.append(local_datasets)
+
+    return dirs
+
+
 def interactive_upload(cfg: AppConfig) -> None:
     """Interactive upload session: pick dataset, choose delete, upload."""
     episodes_dir = Path(cfg.upload.episodes_dir)
-    if not episodes_dir.exists():
-        print(f"{RED}Episodes directory does not exist: {episodes_dir}{NC}")
+    scan_dirs = _collect_scan_dirs(episodes_dir)
+
+    if not scan_dirs:
+        print(f"{RED}No episode directories found.{NC}")
         sys.exit(1)
 
-    manifest = ManifestStore(str(episodes_dir))
+    # Use first available dir for the manifest
+    manifest = ManifestStore(str(scan_dirs[0]))
 
     print()
     print(f"{BOLD}ego-uploader{NC} — interactive mode")
     print("───────────────────────────────────")
-    print(f"  Directory:       {DIM}{episodes_dir}{NC}")
+    for sd in scan_dirs:
+        print(f"  Directory:       {DIM}{sd}{NC}")
     print(f"  Bucket:          {BOLD}{cfg.cloud.bucket}{NC}")
     print(f"  Prefix:          {DIM}{cfg.cloud.prefix or '(none)'}{NC}")
     print(f"  Already uploaded: {manifest.uploaded_count} file(s)")
     print()
 
-    # Discover datasets
+    # Discover datasets from all scan directories
     print(f"{DIM}Scanning for datasets...{NC}")
-    datasets = discover_datasets(
-        episodes_dir, manifest, cfg.upload.file_settle_s,
-    )
+    datasets: list[DatasetInfo] = []
+    seen_names: set[str] = set()
+    for sd in scan_dirs:
+        for ds in discover_datasets(sd, manifest, cfg.upload.file_settle_s):
+            if ds.name not in seen_names:
+                datasets.append(ds)
+                seen_names.add(ds.name)
 
     if not datasets:
-        print(f"{YELLOW}No datasets found in {episodes_dir}{NC}")
+        print(f"{YELLOW}No datasets found in {', '.join(str(d) for d in scan_dirs)}{NC}")
         print(f"{DIM}(Datasets must contain a dataset.json manifest){NC}")
         sys.exit(0)
 
     # Also check for loose .egorec files not in any dataset
-    all_pending = scan_pending_episodes(
-        episodes_dir, manifest, cfg.upload.file_settle_s,
-    )
+    all_pending: list[PendingFile] = []
+    for sd in scan_dirs:
+        all_pending.extend(scan_pending_episodes(
+            sd, manifest, cfg.upload.file_settle_s,
+        ))
     dataset_pending = sum(ds.pending_count for ds in datasets)
     loose_pending = len(all_pending) - dataset_pending
 
@@ -1168,20 +1196,20 @@ def interactive_upload(cfg: AppConfig) -> None:
         print("Cancelled.")
         return
 
-    selected_name: Optional[str] = None  # None = all datasets
+    selected_ds: Optional[DatasetInfo] = None  # None = all datasets
     include_loose = False
 
     if choice.lower() == "a":
         # Upload all datasets (but not loose files)
-        selected_name = None
+        selected_ds = None
     elif choice.lower() == "l":
         # Upload everything (all datasets + loose files)
-        selected_name = None
+        selected_ds = None
         include_loose = True
     elif choice.isdigit():
         idx = int(choice) - 1
         if 0 <= idx < len(datasets):
-            selected_name = datasets[idx].name
+            selected_ds = datasets[idx]
         else:
             print(f"{RED}Invalid selection.{NC}")
             return
@@ -1189,16 +1217,15 @@ def interactive_upload(cfg: AppConfig) -> None:
         # Try matching by name
         matches = [ds for ds in datasets if ds.name.lower() == choice.lower()]
         if matches:
-            selected_name = matches[0].name
+            selected_ds = matches[0]
         else:
             print(f"{RED}No dataset matching '{choice}'.{NC}")
             return
 
     # Get pending count for selection
-    if selected_name:
-        sel_ds = next(ds for ds in datasets if ds.name == selected_name)
-        sel_pending = sel_ds.pending_count
-        sel_size = sel_ds.pending_size
+    if selected_ds:
+        sel_pending = selected_ds.pending_count
+        sel_size = selected_ds.pending_size
     elif include_loose:
         sel_pending = len(all_pending)
         sel_size = sum(pf.size_bytes for pf in all_pending)
@@ -1221,7 +1248,7 @@ def interactive_upload(cfg: AppConfig) -> None:
     delete_after = delete_choice == "2"
 
     # Confirmation
-    dataset_label = selected_name or ("all (+ loose)" if include_loose else "all datasets")
+    dataset_label = selected_ds.name if selected_ds else ("all (+ loose)" if include_loose else "all datasets")
     print()
     print("───────────────────────────────────")
     print(f"  Dataset:    {BOLD}{dataset_label}{NC}")
@@ -1239,19 +1266,24 @@ def interactive_upload(cfg: AppConfig) -> None:
     # Apply settings and run
     cfg.upload.delete_after_upload = delete_after
 
-    # For a single dataset, set the filter.
-    # For "all datasets" without loose files, we process each dataset.
-    # For "all + loose", we upload everything (no filter).
-    if include_loose:
-        dataset_filter = None
-    elif selected_name:
-        dataset_filter = selected_name
+    # Point episodes_dir at the selected dataset's parent so upload_loop
+    # finds files in the right place (may be local datasets/ dir).
+    if selected_ds:
+        cfg.upload.episodes_dir = str(selected_ds.path.parent)
+        dataset_filter = selected_ds.name
     else:
-        # "All datasets" — upload everything in the episodes_dir
+        # "All" — run upload_loop once per scan dir
         dataset_filter = None
 
-    print()
-    upload_loop(cfg, once=True, dataset_filter=dataset_filter)
+    if include_loose or not selected_ds:
+        # Upload from each scan directory
+        print()
+        for sd in scan_dirs:
+            cfg.upload.episodes_dir = str(sd)
+            upload_loop(cfg, once=True, dataset_filter=dataset_filter)
+    else:
+        print()
+        upload_loop(cfg, once=True, dataset_filter=dataset_filter)
 
 
 # ---------------------------------------------------------------------------
