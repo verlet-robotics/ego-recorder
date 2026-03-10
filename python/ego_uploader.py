@@ -1322,6 +1322,12 @@ def main() -> None:
         help="Delete local files after R2-verified upload (overrides config)",
     )
     parser.add_argument(
+        "--episodes-dir",
+        type=str,
+        default=None,
+        help="Override episodes directory from config",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable debug logging",
@@ -1335,6 +1341,9 @@ def main() -> None:
     )
 
     cfg = load_config(args.config)
+
+    if args.episodes_dir:
+        cfg.upload.episodes_dir = args.episodes_dir
 
     # CLI overrides
     if args.delete:

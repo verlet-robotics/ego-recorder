@@ -5,9 +5,10 @@
 # the Python uploader.
 #
 # Usage:
-#   ./scripts/upload.sh              # Interactive upload (default)
-#   ./scripts/upload.sh --once       # Single pass then exit
-#   ./scripts/upload.sh [ARGS...]    # Pass any args to ego_uploader.py
+#   ./scripts/upload.sh                    # Interactive upload (default)
+#   ./scripts/upload.sh /path/to/dir       # Upload from a specific directory
+#   ./scripts/upload.sh --once             # Single pass then exit
+#   ./scripts/upload.sh [ARGS...]          # Pass any args to ego_uploader.py
 
 set -euo pipefail
 
@@ -81,11 +82,19 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Launch uploader
 # ---------------------------------------------------------------------------
-# Default to interactive mode if no args given
+# If first arg is a directory, treat it as a custom episodes dir
+extra_args=()
+if [[ $# -ge 1 && -d "$1" ]]; then
+    extra_args+=(--episodes-dir "$1")
+    shift
+fi
+
+# Default to interactive mode if no other args given
 if [[ $# -eq 0 ]]; then
     set -- --interactive
 fi
 
 exec python3 "${PROJECT_DIR}/python/ego_uploader.py" \
     --config "$CONFIG_FILE" \
+    "${extra_args[@]}" \
     "$@"
