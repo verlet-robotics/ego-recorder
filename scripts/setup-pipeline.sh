@@ -127,6 +127,7 @@ apt-get update -qq
 
 PACKAGES=(
     cmake g++ pkg-config git curl ca-certificates
+    libclang-dev
     libzstd-dev libturbojpeg0-dev
     libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev
     libavutil-dev libswscale-dev libswresample-dev

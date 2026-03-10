@@ -71,6 +71,9 @@ install_deps() {
         curl
         ca-certificates
 
+        # Rust build deps (bindgen needs libclang)
+        libclang-dev
+
         # Compression
         libzstd-dev
         libturbojpeg0-dev
