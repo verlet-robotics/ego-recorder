@@ -5,50 +5,6 @@
 # and BOLD/NC variables to be defined by the calling script.
 
 # ---------------------------------------------------------------------------
-# Auto-detect facility server on local /24 subnet
-# ---------------------------------------------------------------------------
-# Pure function: echoes the IP of a facility server if found.
-# Returns 0 if found, 1 if not. No side-effect output (safe for $()).
-detect_facility_server() {
-    local local_ip
-    local_ip=$(ip route get 1.1.1.1 2>/dev/null \
-        | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1); exit}')
-    [[ -z "$local_ip" ]] && return 1
-
-    local subnet="${local_ip%.*}"
-    local result_file
-    result_file=$(mktemp)
-
-    # Parallel TCP connect to port 8100 across the /24
-    local i
-    for i in $(seq 1 254); do
-        [[ "${subnet}.$i" == "$local_ip" ]] && continue
-        (
-            if timeout 1 bash -c "echo >/dev/tcp/${subnet}.$i/8100" 2>/dev/null; then
-                echo "${subnet}.$i" >> "$result_file"
-            fi
-        ) &
-    done
-    wait
-
-    # Verify candidates with an HTTP probe
-    local found=""
-    if [[ -s "$result_file" ]]; then
-        while IFS= read -r candidate; do
-            if curl -sf "http://${candidate}:8100/health" --max-time 2 >/dev/null 2>&1 ||
-               curl -sf "http://${candidate}:8100/" --max-time 2 >/dev/null 2>&1; then
-                found="$candidate"
-                break
-            fi
-        done < "$result_file"
-    fi
-    rm -f "$result_file"
-
-    [[ -n "$found" ]] && echo "$found" && return 0
-    return 1
-}
-
-# ---------------------------------------------------------------------------
 # R2 credential setup (paste-block or individual entry)
 # ---------------------------------------------------------------------------
 # Usage: prompt_r2_credentials /path/to/.env [sudo]
@@ -185,21 +141,7 @@ setup_facility() {
     echo ""
 
     local facility_ip=""
-
-    # Auto-detection
-    info "Scanning local network for facility server..."
-    if facility_ip=$(detect_facility_server); then
-        ok "Found facility server at ${facility_ip}"
-        read -rp "Use ${facility_ip}? [Y/n] " ans
-        [[ "$ans" =~ ^[Nn] ]] && facility_ip=""
-    else
-        info "No facility server found on local network."
-    fi
-
-    # Manual fallback
-    if [[ -z "$facility_ip" ]]; then
-        read -rp "Facility server IP or URL (leave empty to skip): " facility_ip
-    fi
+    read -rp "Facility server IP or URL (leave empty to skip): " facility_ip
 
     if [[ -z "$facility_ip" ]]; then
         info "Skipping facility setup."
