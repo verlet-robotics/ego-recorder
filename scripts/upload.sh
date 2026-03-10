@@ -33,19 +33,15 @@ error() { echo -e "${RED}[upload]${NC} $*" >&2; }
 source "${SCRIPT_DIR}/lib-env.sh"
 
 # ---------------------------------------------------------------------------
-# 0. Ensure Python env with uploader deps
+# 0. Ensure Python venv with uploader deps
 # ---------------------------------------------------------------------------
-# If no venv/conda is active, create and activate a project .venv
-if [[ -z "${VIRTUAL_ENV:-}" && -z "${CONDA_PREFIX:-}" ]]; then
-    venv_dir="${PROJECT_DIR}/.venv"
-    if [[ ! -d "$venv_dir" ]]; then
-        info "Creating Python venv at ${venv_dir}..."
-        python3 -m venv "$venv_dir"
-    fi
-    source "${venv_dir}/bin/activate"
+venv_dir="${PROJECT_DIR}/.venv"
+if [[ ! -d "$venv_dir" ]]; then
+    info "Creating Python venv at ${venv_dir}..."
+    python3 -m venv "$venv_dir"
 fi
+source "${venv_dir}/bin/activate"
 
-# Install uploader deps if boto3 is missing (works in any env)
 if ! python3 -c "import boto3" 2>/dev/null; then
     info "Installing uploader dependencies..."
     pip install -q -r "${PROJECT_DIR}/python/requirements-uploader.txt"
