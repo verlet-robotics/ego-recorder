@@ -1,0 +1,21 @@
+[Unit]
+Description=ego-uploader R2 cloud sync for .egorec episodes
+After=network-online.target ego-recorder.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/ego-recorder/.env
+ExecStart=/opt/ego-uploader/venv/bin/python3 /opt/ego-uploader/ego_uploader.py --config /etc/ego-recorder/upload_config.toml
+Restart=always
+RestartSec=10s
+WatchdogSec=300s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ego-recorder/recordings /etc/ego-recorder
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

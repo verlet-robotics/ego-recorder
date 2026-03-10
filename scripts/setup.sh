@@ -434,6 +434,16 @@ build_project() {
 }
 
 # ---------------------------------------------------------------------------
+# 3b. Build ego-qc (Rust QC tools for on-device data pruning)
+# ---------------------------------------------------------------------------
+build_ego_qc() {
+    info "Building ego-qc (Rust QC tools)..."
+    local rust_dir="${PROJECT_DIR}/rust"
+    cargo build --release --manifest-path "${rust_dir}/Cargo.toml" -p ego-qc
+    ok "Build complete: ${rust_dir}/target/release/ego-qc"
+}
+
+# ---------------------------------------------------------------------------
 # 4. Run tests
 # ---------------------------------------------------------------------------
 run_tests() {
@@ -483,14 +493,14 @@ install_python_export() {
     # RLDS export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-rlds.txt" ]]; then
         info "Installing RLDS export dependencies..."
-        pip install -r "${PROJECT_DIR}/python/requirements-rlds.txt"
+        python3 -m pip install -r "${PROJECT_DIR}/python/requirements-rlds.txt"
         ok "RLDS export dependencies installed"
     fi
 
     # LeRobot export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-lerobot.txt" ]]; then
         info "Installing LeRobot export dependencies..."
-        pip install -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
+        python3 -m pip install -r "${PROJECT_DIR}/python/requirements-lerobot.txt"
         ok "LeRobot export dependencies installed"
     fi
 }
@@ -530,6 +540,7 @@ main() {
     install_udev_rules
     setup_user_groups
     build_project
+    build_ego_qc
     run_tests
     install_python_export
     deploy_systemd
@@ -539,9 +550,10 @@ main() {
     echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
     echo -e "${BOLD}═══════════════════════════════════════${NC}"
     echo ""
-    echo -e "  Binary:  ${BUILD_DIR}/ego-recorder"
+    echo -e "  Recorder: ${BUILD_DIR}/ego-recorder"
+    echo -e "  QC tools: ${PROJECT_DIR}/rust/target/release/ego-qc"
     if [[ "$WITH_PYTHON" == "ON" ]]; then
-        echo -e "  Python:  PYTHONPATH=${BUILD_DIR} python3 -c 'import egorec_reader'"
+        echo -e "  Python:   PYTHONPATH=${BUILD_DIR} python3 -c 'import egorec_reader'"
     fi
     echo ""
     echo -e "  ${BOLD}Quick start:${NC}"

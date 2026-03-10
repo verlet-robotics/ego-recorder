@@ -1,0 +1,25 @@
+# Cloud upload configuration for ego-recorder episodes.
+# Used by ego_uploader.py to sync .egorec files to Cloudflare R2.
+#
+# R2 credentials are loaded from .env file (R2_ENDPOINT, R2_ACCESS_KEY_ID,
+# R2_SECRET_ACCESS_KEY). Do NOT put secrets in this file.
+
+[cloud]
+bucket = "ego-data-verlet"
+region = "auto"                  # R2 uses "auto"
+prefix = ""                      # Optional key prefix (e.g. "device-01/")
+
+[upload]
+episodes_dir = "/var/lib/ego-recorder"   # Where ego-recorder writes .egorec files
+poll_interval_s = 30                     # How often to scan for new episodes
+file_settle_s = 10                       # Skip files modified within this many seconds
+connectivity_timeout_s = 5               # HTTP probe timeout
+
+# Facility API integration (managed upload flow).
+# When enabled, episodes are registered with the facility API before upload,
+# and marked complete after. The facility forwards metadata to the cloud API.
+# Set FACILITY_URL env var or configure here.
+[facility]
+enabled = false
+url = ""                                 # e.g. "http://192.168.1.100:8100"
+dataset_name = ""                        # Defaults to dataset.json name or hostname

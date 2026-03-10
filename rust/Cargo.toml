@@ -5,6 +5,7 @@ members = [
     "tfrecord",
     "lerobot-writer",
     "ego-convert",
+    "ego-qc",
 ]
 resolver = "2"
 

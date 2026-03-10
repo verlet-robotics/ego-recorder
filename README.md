@@ -12,17 +12,47 @@ Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to
 - Camera disconnect/reconnect recovery
 - Per-frame IMU data (D435i)
 
+## Which Setup Script?
+
+Choose based on your needs:
+
+| Need | Script | Time | Includes |
+|------|--------|------|----------|
+| Recording + viewer QC | `./scripts/setup-station.sh` | 2-3 min | `ego-recorder`, `ego-qc` |
+| ML export (RLDS/LeRobot) | `./scripts/setup.sh` | 5+ min | Above + Python + export tools |
+| Full pipeline + cloud upload | `./scripts/setup-pipeline.sh` | (see DEPLOYMENT.md) | Systemd services + uploader |
+
 ## Quick start
 
+**Before you start — verify your camera:**
+
 ```bash
-./scripts/setup.sh             # install deps, build, install binary
-./scripts/setup-recordings.sh  # create recording directory + dataset
-./scripts/record.sh            # choose dataset, mode, start recording
+lsusb | grep 8086
+# Should show:
+#   D435  = 8086:0b07
+#   D435i = 8086:0b3a
 ```
 
-For headless-only machines (no display): `./scripts/setup.sh --headless`
+If not detected, try a different USB 3.0 port or cable.
 
-Run `./scripts/setup.sh --help` for all options or `./scripts/setup.sh --interactive` to choose components individually.
+**Then install and record:**
+
+```bash
+./scripts/setup-station.sh     # install deps, build recorder + ego-qc
+./scripts/setup-recordings.sh  # create dataset directory
+./scripts/record.sh            # start recording
+```
+
+For headless-only machines (no display): `./scripts/setup-station.sh --headless`
+
+**If you need ML export** (RLDS/LeRobot), use `./scripts/setup.sh` instead of `setup-station.sh`. Run `./scripts/setup.sh --help` for all options or `./scripts/setup.sh --interactive` to choose components individually.
+
+**To verify setup succeeded:**
+
+```bash
+./build/ego-recorder --version
+./rust/target/release/ego-qc --version
+```
 
 ### Manual setup
 
@@ -77,19 +107,21 @@ Build options:
 
 ### Record
 
+**Interactive (recommended):**
+
 ```bash
 ./scripts/record.sh            # interactive: pick dataset, mode, go
 ./scripts/record.sh pick       # pre-select dataset
 ```
 
-Or run directly:
+**Direct CLI:**
 
 ```bash
-# GUI mode
-ego-recorder -o /var/lib/ego-recorder/pick
+# GUI mode (saves to ./datasets/pick/)
+./build/ego-recorder -o ./datasets/pick
 
 # Headless mode
-ego-recorder --headless -o /var/lib/ego-recorder/pick -d 300
+./build/ego-recorder --headless -o ./datasets/pick -d 300
 ```
 
 Episodes are auto-named `pick_000.egorec`, `pick_001.egorec`, etc. Use `-s name` to override.
@@ -106,15 +138,17 @@ Shows format version, codecs, frame count, duration, resolution, and camera intr
 
 ### Export
 
+> **Note:** Export requires `./scripts/setup.sh` (full install). If you only ran `setup-station.sh`, run `setup.sh` now.
+
 ```bash
 # RLDS (TFRecord)
-ego-recorder export rlds recording.egorec -o ./rlds_output
+./build/ego-recorder export rlds recording.egorec -o ./rlds_output
 
 # LeRobot v3
-ego-recorder export lerobot recording.egorec -o ./lerobot_output
+./build/ego-recorder export lerobot recording.egorec -o ./lerobot_output
 
 # Export entire dataset (preserves manifest metadata)
-ego-recorder export rlds /var/lib/ego-recorder/pick -o ./rlds_output
+./build/ego-recorder export rlds ./datasets/pick -o ./rlds_output
 ```
 
 ## Dataset management
@@ -123,11 +157,13 @@ Organize multiple recordings into a dataset with metadata for structured ML expo
 
 ### Initialize a dataset
 
-Use the interactive setup script:
+Use the interactive setup script (recommended):
 
 ```bash
 ./scripts/setup-recordings.sh
 ```
+
+This creates `./datasets/<name>/` with auto-timestamped subdirectories: `2026/MM/DD/`.
 
 Or use the CLI directly:
 
@@ -141,14 +177,14 @@ Creates a `dataset.json` manifest in the directory. Use `--force` to overwrite a
 
 ### Record into a dataset
 
-Record directly into the dataset directory -- episodes are auto-indexed and auto-registered:
+Record directly into the dataset directory -- episodes are auto-timestamped and auto-registered:
 
 ```bash
-ego-recorder --headless -o ./my_dataset -d 30
-# creates my_dataset/2026/03/09/my_dataset_000.egorec
+./build/ego-recorder --headless -o ./my_dataset -d 30
+# creates: my_dataset/2026/03/09/my_dataset_000.egorec
 ```
 
-Each episode's metadata (session name, timestamp, duration, frame count) is automatically extracted from the `.egorec` file header and footer.
+Episodes are auto-organized by date in `YYYY/MM/DD/` subdirectories. Each episode's metadata (session name, timestamp, duration, frame count) is automatically extracted from the `.egorec` file header and footer and registered in `dataset.json`.
 
 ### Add existing recordings
 
@@ -164,12 +200,12 @@ Duplicate filenames are silently skipped (idempotent).
 ./build/ego-recorder dataset info ./my_dataset
 ```
 
-Shows dataset name, description, tags, per-episode details, and totals.
+Shows dataset name, description, tags, episode count, total duration, and total frames.
 
 ### Remove an episode
 
 ```bash
-./build/ego-recorder dataset remove ./my_dataset recording1.egorec
+./build/ego-recorder dataset remove ./my_dataset 2026/03/09/recording_000.egorec
 ```
 
 ### Export a dataset
@@ -183,6 +219,8 @@ Pass the dataset directory (instead of individual files) to preserve manifest me
 # LeRobot v3
 ./build/ego-recorder export lerobot ./my_dataset -o ./lerobot_output
 ```
+
+> **Note:** Export requires `./scripts/setup.sh`. If you only ran `setup-station.sh`, run it now.
 
 The exporter reads `dataset.json`, resolves all episode paths, and passes the dataset name, description, and tags through to the exported format.
 
@@ -209,6 +247,82 @@ The `dataset.json` manifest:
 }
 ```
 
+## Benchmark datasets
+
+### EgoPAT3D sample
+
+Download sample episodes from the [EgoPAT3D](https://ai4ce.github.io/EgoPAT3D/) egocentric manipulation dataset and convert them to `.egorec` format for benchmarking the activity detector.
+
+**Prerequisites:**
+
+1. Request access to [EgoPAT3Dv2 on HuggingFace](https://huggingface.co/datasets/qianlima/EgoPAT3Dv2)
+2. Authenticate — one of:
+   ```bash
+   # Option A: huggingface-cli (writes ~/.huggingface/token)
+   pip install huggingface_hub && huggingface-cli login
+
+   # Option B: environment variable
+   export HF_TOKEN=hf_your_token_here
+
+   # Option C: pass directly
+   python scripts/download_egopat3d.py --token hf_your_token_here
+   ```
+3. (Optional) Build ego-convert for `.egorec` import/export: `cd rust && cargo build -p ego-convert --release`
+
+**Download and convert:**
+
+```bash
+# Full pipeline: download 3 episodes (30s each), convert to .egorec, validate + analyze
+python scripts/download_egopat3d.py
+
+# Fewer frames (faster download, ~7s per episode)
+python scripts/download_egopat3d.py --frames 200
+
+# Download only (no .egorec conversion)
+python scripts/download_egopat3d.py --skip-convert
+
+# Custom output directory
+python scripts/download_egopat3d.py --output /tmp/egopat3d
+```
+
+The script downloads 3 episodes from different scenes (kitchen counter, drawer, desk), extracts `rgb_video.mp4` + 16-bit depth PNGs via HTTP range requests (~1-2 GB per episode), converts each to `.egorec`, writes a `dataset.json` manifest, then validates and analyzes the result.
+
+Output structure:
+```
+datasets/egopat3d/
+  kitchenCounter_3/       # raw extracted data
+    rgb_video.mp4
+    d2rgb/1.png ... 900.png
+  drawer_1/
+  desk_2/
+  egorec/                 # converted dataset
+    kitchenCounter_3.egorec
+    drawer_1.egorec
+    desk_2.egorec
+    dataset.json
+```
+
+**Permissions:** On stations running the ego-recorder systemd service, the `datasets/` directory is owned by the `ego-recorder` system user. The script will automatically request `sudo` to create the directory and grant your user write access via POSIX ACLs (same mechanism as `setup-recordings.sh`). If `sudo` is not available, run manually:
+
+```bash
+sudo mkdir -p datasets/egopat3d
+sudo setfacl -R -m u:$USER:rwx datasets/egopat3d
+sudo setfacl -R -d -m u:$USER:rwx datasets/egopat3d
+```
+
+**Importing custom video + depth:** The `ego-convert import` command works with any MP4 + depth PNG directory:
+
+```bash
+ego-convert import \
+  --video path/to/rgb.mp4 \
+  --depth-dir path/to/depth_pngs/ \
+  --output output.egorec \
+  --width 1280 --height 720 --fps 30 \
+  --session-name my_recording
+```
+
+Depth PNGs must be 1-indexed (`1.png`, `2.png`, ...) 16-bit grayscale. The converter handles resolution mismatches via nearest-neighbor scaling.
+
 ## Configuration
 
 Pass `--config path/to/config.toml` or use CLI flags. CLI flags override config file values.
@@ -224,9 +338,12 @@ Pass `--config path/to/config.toml` or use CLI flags. CLI flags override config 
 
 See `deploy/config.toml.example` for the full TOML config reference.
 
-## Production deployment
+## Next steps
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the full production setup guide covering GUI mode, headless systemd service, udev rules, lid-close prevention, monitoring, updating, and troubleshooting.
+- **Want to review recordings before uploading?** See viewer setup in [DEPLOYMENT.md](DEPLOYMENT.md#viewer)
+- **Want automatic cloud sync?** See [DEPLOYMENT.md](DEPLOYMENT.md#cloud-upload-r2-sync)
+- **Want QC automation (prune idle episodes)?** See [DEPLOYMENT.md](DEPLOYMENT.md#ego-qc-reference)
+- **Deploying to production?** See [DEPLOYMENT.md](DEPLOYMENT.md) for full systemd service setup
 
 ## File format
 

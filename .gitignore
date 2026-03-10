@@ -1,3 +1,4 @@
+.env
 build/
 build_*/
 *.deb
@@ -12,3 +13,4 @@ scripts/librealsense/
 datasets/
 recordings/
 test/
+node_modules/

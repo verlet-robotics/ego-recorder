@@ -253,7 +253,7 @@ setup_user_groups() {
 }
 
 # ---------------------------------------------------------------------------
-# 5. Build (recorder only — no Rust, no Python, no tests)
+# 5. Build (recorder only — no Python, no tests)
 # ---------------------------------------------------------------------------
 build() {
     info "Configuring CMake..."
@@ -279,6 +279,27 @@ build() {
     cmake --build "$BUILD_DIR" --parallel "$NPROC"
 
     ok "Build complete: ${BUILD_DIR}/ego-recorder"
+}
+
+# ---------------------------------------------------------------------------
+# 5b. Build ego-qc (Rust QC tools for on-device data pruning)
+# ---------------------------------------------------------------------------
+build_ego_qc() {
+    info "Building ego-qc (Rust QC tools)..."
+
+    # Install Rust toolchain if not present
+    if ! command -v cargo &>/dev/null; then
+        info "Installing Rust toolchain via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --default-toolchain stable --profile minimal
+        source "${HOME}/.cargo/env"
+        ok "Rust toolchain installed"
+    fi
+
+    local rust_dir="${PROJECT_DIR}/rust"
+    cargo build --release --manifest-path "${rust_dir}/Cargo.toml" -p ego-qc
+
+    ok "Build complete: ${rust_dir}/target/release/ego-qc"
 }
 
 # ---------------------------------------------------------------------------
@@ -314,11 +335,14 @@ install_realsense
 install_udev_rules
 setup_user_groups
 build
+build_ego_qc
 deploy_systemd
 
+RUST_DIR="${PROJECT_DIR}/rust"
 echo ""
 echo -e "${GREEN}${BOLD}  Setup complete!${NC}"
-echo -e "  Binary: ${BUILD_DIR}/ego-recorder"
+echo -e "  Recorder: ${BUILD_DIR}/ego-recorder"
+echo -e "  QC tools: ${RUST_DIR}/target/release/ego-qc"
 echo ""
 if [[ "$INSTALL_SYSTEMD" == true ]]; then
     echo "  Service installed. Next steps:"
@@ -329,4 +353,8 @@ elif [[ "$WITH_GUI" == "ON" ]]; then
 else
     echo "  Run: ${BUILD_DIR}/ego-recorder --headless -o ./recordings -d 300"
 fi
+echo ""
+echo "  QC usage:"
+echo "    ${RUST_DIR}/target/release/ego-qc analyze ./recordings"
+echo "    ${RUST_DIR}/target/release/ego-qc prune --apply ./recordings"
 echo ""

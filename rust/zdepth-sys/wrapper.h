@@ -28,6 +28,25 @@ int zdepth_decompressor_decompress(
     const uint16_t** out_data,
     size_t* out_count);
 
+typedef struct ZdepthCompressorC ZdepthCompressorC;
+
+ZdepthCompressorC* zdepth_compressor_new(void);
+void zdepth_compressor_free(ZdepthCompressorC* c);
+
+/// Compress a depth buffer using Zdepth.
+/// Returns 0 on success, non-zero on error.
+/// On success, *out_data points to an internal buffer of *out_size bytes.
+/// The buffer is valid until the next call to zdepth_compressor_compress
+/// or zdepth_compressor_free.
+int zdepth_compressor_compress(
+    ZdepthCompressorC* c,
+    const uint16_t* depth_data,
+    int width,
+    int height,
+    int keyframe,
+    const uint8_t** out_data,
+    size_t* out_size);
+
 #ifdef __cplusplus
 }
 #endif

@@ -47,4 +47,46 @@ int zdepth_decompressor_decompress(
     return 0;
 }
 
-} // extern "C"
+} // extern "C" (decompressor)
+
+struct ZdepthCompressorC {
+    zdepth::DepthCompressor compressor;
+    std::vector<uint8_t> compressed_out;
+};
+
+extern "C" {
+
+ZdepthCompressorC* zdepth_compressor_new(void) {
+    return new ZdepthCompressorC();
+}
+
+void zdepth_compressor_free(ZdepthCompressorC* c) {
+    delete c;
+}
+
+int zdepth_compressor_compress(
+    ZdepthCompressorC* c,
+    const uint16_t* depth_data,
+    int width,
+    int height,
+    int keyframe,
+    const uint8_t** out_data,
+    size_t* out_size)
+{
+    if (!c || !depth_data || width <= 0 || height <= 0) {
+        return -1;
+    }
+
+    zdepth::DepthResult result = c->compressor.Compress(
+        width, height, depth_data, c->compressed_out, keyframe != 0);
+
+    if (result != zdepth::DepthResult::Success) {
+        return static_cast<int>(result) + 1;
+    }
+
+    *out_data = c->compressed_out.data();
+    *out_size = c->compressed_out.size();
+    return 0;
+}
+
+} // extern "C" (compressor)
