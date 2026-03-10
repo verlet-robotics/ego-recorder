@@ -78,10 +78,15 @@ install_deps() {
         # OpenSSL (needed if building librealsense from source)
         libssl-dev
 
-        # FFmpeg (H.264 encoder only needs these 3)
+        # FFmpeg — C++ encoder needs avcodec/avutil/swscale,
+        # Rust ffmpeg-next crate also needs avformat/swresample/avfilter
         libavcodec-dev
+        libavdevice-dev
+        libavfilter-dev
+        libavformat-dev
         libavutil-dev
         libswscale-dev
+        libswresample-dev
 
         # Audio alerts
         espeak-ng

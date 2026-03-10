@@ -128,7 +128,8 @@ apt-get update -qq
 PACKAGES=(
     cmake g++ pkg-config git curl ca-certificates
     libzstd-dev libturbojpeg0-dev
-    libavcodec-dev libavutil-dev libswscale-dev
+    libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev
+    libavutil-dev libswscale-dev libswresample-dev
     libsystemd-dev
     espeak-ng
     python3 python3-pip python3-venv
