@@ -244,7 +244,7 @@ bool HeadlessPresenter::take_inhibitor_lock()
         &error,                             // error out
         &reply,                             // reply out
         "ssss",                             // signature: 4 strings in
-        "handle-lid-switch:sleep",          // what to block
+        "handle-lid-switch:sleep:idle",      // what to block
         "ego-recorder",                     // who (app name)
         "Recording in progress",            // why
         "block"                             // mode
@@ -279,7 +279,7 @@ bool HeadlessPresenter::take_inhibitor_lock()
     }
 
     fprintf(stderr, "[headless] D-Bus inhibitor lock acquired (fd=%d). "
-                    "Blocking handle-lid-switch:sleep.\n", inhibitor_fd_);
+                    "Blocking handle-lid-switch:sleep:idle.\n", inhibitor_fd_);
     return true;
 #else
     return false;

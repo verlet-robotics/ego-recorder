@@ -5,7 +5,7 @@
 // Designed for unattended headless recording on a closed laptop without a display.
 // Implements the full IPresenter lifecycle while managing:
 //   - systemd sd_notify watchdog (READY=1, WATCHDOG=1, STATUS=..., STOPPING=1)
-//   - D-Bus inhibitor lock blocking handle-lid-switch:sleep
+//   - D-Bus inhibitor lock blocking handle-lid-switch:sleep:idle
 //   - Periodic disk space monitoring with configurable threshold
 //   - Machine-readable JSON status file at /run/ego-recorder/status
 //   - Camera disconnect/reconnect status reporting
@@ -66,7 +66,7 @@ public:
 private:
     // ---- Private helpers ----
 
-    /// Acquire D-Bus inhibitor lock blocking handle-lid-switch:sleep.
+    /// Acquire D-Bus inhibitor lock blocking handle-lid-switch:sleep:idle.
     /// Non-fatal if it fails (logind.conf drop-in is the fallback).
     bool take_inhibitor_lock();
 

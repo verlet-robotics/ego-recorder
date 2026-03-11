@@ -8,6 +8,7 @@ compile_commands.json
 *.egorec
 imgui.ini
 __pycache__/
+.venv/
 rust/target/
 scripts/librealsense/
 datasets/
