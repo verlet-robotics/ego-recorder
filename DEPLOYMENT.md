@@ -10,12 +10,13 @@ cd ego-recorder
 ./scripts/setup-station.sh
 ```
 
-This builds two tools:
+Requires network and sudo. Works on freshly installed Ubuntu — no prior dependencies needed. The script runs a preflight check, installs all apt packages, RealSense SDK, Rust, Bun, and builds three components:
 
-| Tool | Location | Purpose |
-|------|----------|---------|
+| Component | Location | Purpose |
+|-----------|----------|---------|
 | `ego-recorder` | `build/ego-recorder` | C++ RGBD capture from Intel RealSense cameras |
 | `ego-qc` | `rust/target/release/ego-qc` | Rust CLI for QC, pruning, splicing, and MP4 extraction |
+| `viewer-app` | `viewer-app/` | Tauri desktop app for dataset review and curation |
 
 For headless-only machines (no display):
 
@@ -30,6 +31,8 @@ To deploy as a systemd service in one step:
 ```
 
 > **Need RLDS/LeRobot export?** Run `./scripts/setup.sh` instead for the full install (adds `ego-convert` for format conversion, Python bindings, tests).
+> **Recorder only (no viewer)?** Run `./scripts/setup-station.sh --no-viewer` to skip the dataset viewer app build.
+> **Fresh system?** The script installs everything from apt; ensure network and sudo are available.
 
 ### 2. Set up recordings
 
@@ -50,15 +53,13 @@ Prompts you to pick a dataset (or create a new one), choose headless or GUI mode
 ### 4. Review in the viewer
 
 ```bash
-cd viewer
-bun install                                  # first time only
-bun run dev -- --dir ../datasets/pick        # start on :4200
+./scripts/viewer.sh                          # Auto-detect datasets/ or /var/lib/ego-recorder
+./scripts/viewer.sh ./datasets/pick          # Explicit directory
 ```
 
-Opens a web UI at `http://localhost:4200` with RGB + depth video playback, activity analysis, and one-click prune/splice controls.
+Opens the Tauri desktop app with RGB video playback (scrubbable), activity analysis, curation pipeline, and one-click prune/splice.
 
-> If ego-qc is not on your PATH, pass it explicitly:
-> `bun run dev -- --dir ../datasets/pick --qc ../rust/target/release/ego-qc`
+> Use `./scripts/viewer.sh --workspace /path/to/curation-workspace` to open a curation workspace directly.
 
 ### 5. QC and prune
 
@@ -88,45 +89,55 @@ Or set up automatic upload as a systemd service — see [Cloud upload](#cloud-up
 
 > R2 credentials can be configured during any setup script (prompted at the end), or manually in `.env`. See [Upload configuration](#upload-configuration).
 
+### Seamless workflow (record + view)
+
+```bash
+./scripts/setup-station.sh     # One-time: install all deps, build recorder + ego-qc + viewer
+./scripts/setup-recordings.sh  # One-time per dataset: create ./datasets/<name>/
+./scripts/record.sh            # Record episodes
+./scripts/viewer.sh            # Review (or: ./scripts/viewer.sh ./datasets/pick)
+```
+
 ---
 
 ## Viewer
 
-The viewer is a Bun web app that serves `.egorec` recordings for browser playback. It uses `ego-qc` for MP4 conversion (RGB + turbo-colormapped depth) and activity analysis.
+The viewer is a Tauri desktop app that loads `.egorec` recordings for playback and curation. It serves RGB video via an in-memory MP4 muxer (scrubbable seeking) and uses the egorec Rust crate for activity analysis.
 
 ### Prerequisites
 
+All installed by `./scripts/setup-station.sh`:
+
 - [Bun](https://bun.sh) runtime
-- `ego-qc` binary (built by `setup-station.sh` to `rust/target/release/ego-qc`)
+- Tauri deps: libwebkit2gtk-4.1-dev, libxdo-dev, libayatana-appindicator3-dev, librsvg2-dev
+- `ego-qc` binary (used by Python curation stages)
+
+**Bun in new terminals:** If you open a new terminal after setup, add `export PATH="$HOME/.bun/bin:$PATH"` to `~/.bashrc`, or use `./scripts/viewer.sh` which adds it automatically.
 
 ### Running
 
 ```bash
-cd viewer
-bun install                                          # first time only
-bun run dev -- --dir ../datasets/pick                # start on :4200
+./scripts/viewer.sh                          # Auto-detect directory
+./scripts/viewer.sh ./datasets/pick          # Explicit recordings dir
+./scripts/viewer.sh --workspace ./curation-workspace/ctj   # Curation workspace
 ```
 
-The `--dir` argument points to a directory containing `.egorec` files (supports nested subdirectories). To point at all datasets at once:
-
-```bash
-bun run dev -- --dir ../datasets
-```
+The viewer auto-detects `./datasets/` or `/var/lib/ego-recorder`. Pass a path to open a specific directory. Use `--workspace` for curation workspaces.
 
 ### Options
 
 ```bash
-# Use a specific ego-qc binary (default: ego-qc on PATH)
-bun run dev -- --dir ../datasets/pick --qc ../rust/target/release/ego-qc
+./scripts/viewer.sh --qc /path/to/ego-qc ./datasets/pick
+./scripts/viewer.sh --workspace /path/to/workspace
 ```
 
 ### Features
 
-- **RGB playback** — streams H.264 directly from `.egorec` via remux (instant, no conversion needed)
-- **Depth playback** — converts zdepth to turbo-colormapped MP4 via `ego-qc mp4` (on-demand, cached)
-- **Activity analysis** — runs `ego-qc analyze` across all episodes, shows verdicts with color-coded scores
-- **One-click prune** — moves low-activity episodes to `.pruned/` via `ego-qc prune`
-- **One-click splice** — extracts active segments via `ego-qc splice`
+- **RGB playback** — scrubbable H.264 from `.egorec` (virtual MP4 server, no FFmpeg)
+- **Activity analysis** — in-app EgorecScanner for verdicts with color-coded scores
+- **One-click prune** — moves low-activity episodes to `.pruned/`
+- **One-click splice** — extracts active segments
+- **Curation pipeline** — QC, intervals, stage, label, cluster (QC/intervals native; others via Python ego_curate)
 - **Metadata panel** — camera intrinsics, session info, frame counts, duration
 
 ---
@@ -140,7 +151,7 @@ For a typical collection station running recorder, QC, and uploader:
 ./scripts/record.sh
 
 # 2. Review in the viewer (optional — for visual inspection)
-cd viewer && bun run dev -- --dir ../datasets/pick
+./scripts/viewer.sh ./datasets/pick
 
 # 3. Analyze quality
 ego-qc analyze ./datasets/pick -v
@@ -165,10 +176,14 @@ python3 python/ego_uploader.py --config deploy/upload_config.toml -i
 
 ### Prerequisites
 
-- Ubuntu 22.04 or 24.04
-- Intel RealSense D435 or D435i
-- USB 3.0 port (USB 2.0 cannot sustain 30fps)
-- ~435 MB/minute of storage at default settings (720p)
+- **OS**: Ubuntu 22.04 or 24.04 (Debian-based)
+- **Network**: Required for apt, Rust (rustup), and Bun install
+- **Sudo**: User must be able to run `sudo apt-get` and `sudo` for udev rules
+- **Camera**: Intel RealSense D435 or D435i
+- **USB**: USB 3.0 port (USB 2.0 cannot sustain 30fps)
+- **Storage**: ~435 MB/minute at default settings (720p)
+
+The setup script installs all dependencies from scratch — suitable for freshly installed systems. It installs: build-essential, cmake, pkg-config, git, curl, wget, file, unzip, libclang-dev, FFmpeg libs, RealSense SDK, Rust (rustup), Bun, and Tauri deps (for the viewer). No prior installs required.
 
 ### Verify the camera
 

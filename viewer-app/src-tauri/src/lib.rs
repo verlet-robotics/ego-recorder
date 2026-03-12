@@ -1,4 +1,5 @@
 pub mod commands;
+mod config;
 mod h264_annex_b;
 mod mp4_mux;
 pub mod pipeline;
@@ -29,6 +30,21 @@ pub fn run() {
                 if path.is_dir() {
                     *app_state.recordings_dir.write() = Some(path);
                     log::info!("Recordings dir from CLI: {}", dir);
+                }
+            }
+
+            // If no CLI --dir, restore from persisted config
+            if app_state.recordings_dir.read().is_none() {
+                if let Ok(data_dir) = app.path().app_data_dir() {
+                    if let Some(path) = config::load_recordings_dir(&data_dir) {
+                        if path.is_dir() {
+                            *app_state.recordings_dir.write() = Some(path.clone());
+                            log::info!(
+                                "Restored recordings dir from config: {}",
+                                path.display()
+                            );
+                        }
+                    }
                 }
             }
 

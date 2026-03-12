@@ -8,6 +8,7 @@ Record synchronized RGB + depth video from Intel RealSense D435/D435i cameras to
 - **H.264 RGB + Zdepth lossless depth** compression (~13-19x vs raw)
 - **GUI mode** with live preview, recording controls, and stats overlay
 - **Headless mode** for unattended recording via systemd
+- **Dataset viewer** (Tauri desktop app) — scrubbable playback, activity analysis, one-click prune/splice, curation pipeline
 - **Export to RLDS** (TFRecord) and **LeRobot v3** formats for ML training
 - Camera disconnect/reconnect recovery
 - Per-frame IMU data (D435i)
@@ -18,8 +19,10 @@ Choose based on your needs:
 
 | Need | Script | Time | Includes |
 |------|--------|------|----------|
-| Recording + viewer QC | `./scripts/setup-station.sh` | 2-3 min | `ego-recorder`, `ego-qc` (+ optional R2 config) |
-| ML export (RLDS/LeRobot) | `./scripts/setup.sh` | 5+ min | Above + Python + export tools (+ optional R2 config) |
+| Recording + dataset viewer | `./scripts/setup-station.sh` | 3-5 min | `ego-recorder`, `ego-qc`, `viewer-app` (Bun + Tauri) |
+| Recorder only (no viewer) | `./scripts/setup-station.sh --no-viewer` | 2-3 min | `ego-recorder`, `ego-qc` |
+| Headless (no GUI, no viewer) | `./scripts/setup-station.sh --headless` | 2-3 min | `ego-recorder`, `ego-qc` |
+| ML export (RLDS/LeRobot) | `./scripts/setup.sh` | 5+ min | Above + Python + export tools |
 | Full pipeline + cloud upload | `./scripts/setup-pipeline.sh` | (see DEPLOYMENT.md) | Systemd services + uploader + R2 setup |
 
 ## Quick start
@@ -35,12 +38,13 @@ lsusb | grep 8086
 
 If not detected, try a different USB 3.0 port or cable.
 
-**Then install and record:**
+**Then install, record, and review:**
 
 ```bash
-./scripts/setup-station.sh     # install deps, build recorder + ego-qc
+./scripts/setup-station.sh     # install deps, build recorder + ego-qc + viewer-app
 ./scripts/setup-recordings.sh  # create dataset directory
 ./scripts/record.sh            # start recording
+./scripts/viewer.sh            # review recordings (scrubbable playback, QC, prune/splice)
 ```
 
 For headless-only machines (no display): `./scripts/setup-station.sh --headless`
@@ -52,6 +56,7 @@ For headless-only machines (no display): `./scripts/setup-station.sh --headless`
 ```bash
 ./build/ego-recorder --version
 ./rust/target/release/ego-qc --version
+# Viewer (if built): ./scripts/viewer.sh ./datasets/<name>
 ```
 
 ### Manual setup
@@ -62,12 +67,16 @@ For headless-only machines (no display): `./scripts/setup-station.sh --headless`
 #### Dependencies
 
 ```bash
-# Ubuntu 22.04 / 24.04
-sudo apt install cmake g++ pkg-config git \
-    libzstd-dev libturbojpeg0-dev \
-    libavcodec-dev libavutil-dev libswscale-dev \
+# Ubuntu 22.04 / 24.04 — recorder + ego-qc
+sudo apt install cmake g++ pkg-config git curl wget file unzip \
+    libzstd-dev libturbojpeg0-dev libclang-dev \
+    libavcodec-dev libavutil-dev libswscale-dev libavformat-dev libavdevice-dev libavfilter-dev libswresample-dev \
     libglfw3-dev libopengl-dev \
-    python3-dev libsystemd-dev
+    libssl-dev libsystemd-dev espeak-ng
+
+# For viewer-app (Tauri desktop): add
+sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+# Plus Bun: curl -fsSL https://bun.sh/install | bash
 ```
 
 Intel RealSense SDK -- install via **one** of:
