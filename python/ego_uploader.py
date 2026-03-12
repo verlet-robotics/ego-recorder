@@ -942,6 +942,18 @@ def upload_loop(cfg: AppConfig, *, once: bool = False, dataset_filter: Optional[
                 pf.rel_path, _fmt_size(pf.size_bytes),
             )
 
+            # Re-create client if it was cleared after a previous failure
+            if s3_client is None:
+                try:
+                    s3_client = make_s3_client(cfg.cloud)
+                    transfer_config = make_transfer_config(cfg.upload)
+                    s3_client.head_bucket(Bucket=cfg.cloud.bucket)
+                    log.info("Reconnected to R2 bucket: %s", cfg.cloud.bucket)
+                except (BotoCoreError, ClientError, NoCredentialsError) as e:
+                    log.error("Cannot reconnect to R2: %s", e)
+                    was_disconnected = True
+                    break
+
             success, elapsed = upload_file(
                 s3_client, cfg.cloud.bucket, pf, object_key,
                 transfer_config=transfer_config,
