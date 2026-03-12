@@ -1,5 +1,7 @@
 pub mod analyze;
 pub mod calibrate;
+pub mod clip;
+pub mod intervals;
 pub mod mp4;
 pub mod prune;
 pub mod restore;

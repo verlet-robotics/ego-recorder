@@ -7,9 +7,8 @@ ego-recorder/rust/egorec/src/format.rs.
 All multi-byte values are little-endian (#pragma pack(push, 1) in C++).
 """
 
-import os
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,15 +17,15 @@ FILE_MAGIC = b"EGOREC\x02\x00"
 FOOTER_MAGIC = 0x454E4F44  # 'DONE'
 INDEX_MAGIC = 0x58444E49   # 'INDX'
 
-# Header: 368 bytes total (packed, no padding)
-# See format.rs FILE_HEADER_SIZE for field-by-field breakdown.
-HEADER_SIZE = 368
+# See rust/egorec/src/format.rs FILE_HEADER_SIZE / FileFooter.
+HEADER_SIZE = 472
 FOOTER_SIZE = 36
 
 
 @dataclass
 class EgorecHeader:
     """Parsed .egorec v2 file header."""
+
     magic: bytes
     header_size: int
     flags: int
@@ -57,10 +56,15 @@ class EgorecHeader:
     depth_codec: int
     rgb_quality: int
     zstd_level: int
+    reserved: bytes
 
     @property
     def has_imu(self) -> bool:
         return bool(self.flags & 0x01)
+
+    @property
+    def has_index(self) -> bool:
+        return bool(self.flags & 0x02)
 
     @property
     def recorded_at(self) -> datetime | None:
@@ -72,6 +76,7 @@ class EgorecHeader:
 
     def to_intrinsics_dict(self) -> dict:
         """Return camera intrinsics as a JSON-serializable dict."""
+
         return {
             "color": {
                 "width": self.color_width,
@@ -104,6 +109,7 @@ class EgorecHeader:
 @dataclass
 class EgorecFooter:
     """Parsed .egorec v2 file footer."""
+
     index_magic: int
     index_offset: int
     index_entry_count: int
@@ -125,6 +131,7 @@ class EgorecFooter:
 @dataclass
 class EgorecMetadata:
     """Combined header + footer metadata for an .egorec file."""
+
     header: EgorecHeader
     footer: EgorecFooter | None
     file_size: int
@@ -144,6 +151,7 @@ class EgorecMetadata:
 
     def to_episode_dict(self) -> dict:
         """Return metadata as a dict suitable for the facility API registration."""
+
         return {
             "session_name": self.header.session_name or None,
             "frame_count": self.frame_count,
@@ -164,6 +172,7 @@ class EgorecMetadata:
 
 def _read_cstring(data: bytes, max_len: int) -> str:
     """Read a null-terminated C string from a fixed-width byte field."""
+
     end = data.find(b"\x00")
     if end == -1:
         end = max_len
@@ -172,65 +181,77 @@ def _read_cstring(data: bytes, max_len: int) -> str:
 
 def read_header(data: bytes) -> EgorecHeader:
     """Parse an EgorecHeader from raw bytes (must be >= HEADER_SIZE bytes)."""
+
     if len(data) < HEADER_SIZE:
         raise ValueError(f"Need at least {HEADER_SIZE} bytes, got {len(data)}")
 
-    magic = data[0:8]
+    off = 0
+    magic = data[off:off + 8]
     if magic != FILE_MAGIC:
         raise ValueError(f"Invalid .egorec magic: {magic!r}")
+    off += 8
 
-    # Unpack all fixed fields after magic
-    # header_size(u32) + flags(u32) = 8 bytes at offset 8
-    header_size, flags = struct.unpack_from("<II", data, 8)
+    header_size, flags = struct.unpack_from("<II", data, off)
+    off += 8
 
-    # serial_number: 32 bytes at offset 16
-    serial_number = _read_cstring(data[16:48], 32)
+    serial_number = _read_cstring(data[off:off + 32], 32)
+    off += 32
 
-    # depth intrinsics: offset 48
-    (depth_scale, depth_w, depth_h, depth_fx, depth_fy, depth_ppx, depth_ppy,
-     depth_dist_model) = struct.unpack_from("<fIIfffffI", data, 48)
-    # Wait - let me be more careful about the layout
-    # offset 48: depth_scale(f32=4)
-    # offset 52: depth_width(u32=4)
-    # offset 56: depth_height(u32=4)
-    # offset 60: depth_fx(f32=4)
-    # offset 64: depth_fy(f32=4)
-    # offset 68: depth_ppx(f32=4)
-    # offset 72: depth_ppy(f32=4)
-    # offset 76: depth_distortion_model(u32=4)
-    # offset 80: depth_distortion_coeffs(5*f32=20)
-    off = 48
-    depth_scale = struct.unpack_from("<f", data, off)[0]; off += 4
-    depth_w = struct.unpack_from("<I", data, off)[0]; off += 4
-    depth_h = struct.unpack_from("<I", data, off)[0]; off += 4
-    depth_fx = struct.unpack_from("<f", data, off)[0]; off += 4
-    depth_fy = struct.unpack_from("<f", data, off)[0]; off += 4
-    depth_ppx = struct.unpack_from("<f", data, off)[0]; off += 4
-    depth_ppy = struct.unpack_from("<f", data, off)[0]; off += 4
-    depth_dist_model = struct.unpack_from("<I", data, off)[0]; off += 4
-    depth_dist_coeffs = list(struct.unpack_from("<5f", data, off)); off += 20
+    depth_scale = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    depth_w = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    depth_h = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    depth_fx = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    depth_fy = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    depth_ppx = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    depth_ppy = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    depth_dist_model = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    depth_dist_coeffs = list(struct.unpack_from("<5f", data, off))
+    off += 20
 
-    # Color intrinsics
-    color_w = struct.unpack_from("<I", data, off)[0]; off += 4
-    color_h = struct.unpack_from("<I", data, off)[0]; off += 4
-    color_fx = struct.unpack_from("<f", data, off)[0]; off += 4
-    color_fy = struct.unpack_from("<f", data, off)[0]; off += 4
-    color_ppx = struct.unpack_from("<f", data, off)[0]; off += 4
-    color_ppy = struct.unpack_from("<f", data, off)[0]; off += 4
-    color_dist_model = struct.unpack_from("<I", data, off)[0]; off += 4
-    color_dist_coeffs = list(struct.unpack_from("<5f", data, off)); off += 20
+    color_w = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    color_h = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    color_fx = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    color_fy = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    color_ppx = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    color_ppy = struct.unpack_from("<f", data, off)[0]
+    off += 4
+    color_dist_model = struct.unpack_from("<I", data, off)[0]
+    off += 4
+    color_dist_coeffs = list(struct.unpack_from("<5f", data, off))
+    off += 20
 
-    # Extrinsics
-    extrinsic_rotation = list(struct.unpack_from("<9f", data, off)); off += 36
-    extrinsic_translation = list(struct.unpack_from("<3f", data, off)); off += 12
+    extrinsic_rotation = list(struct.unpack_from("<9f", data, off))
+    off += 36
+    extrinsic_translation = list(struct.unpack_from("<3f", data, off))
+    off += 12
 
-    # Session name: 128 bytes
-    session_name = _read_cstring(data[off:off + 128], 128); off += 128
-
-    # Timestamp, USB type, codec settings
-    start_timestamp_us = struct.unpack_from("<Q", data, off)[0]; off += 8
-    usb_type = _read_cstring(data[off:off + 8], 8); off += 8
+    session_name = _read_cstring(data[off:off + 128], 128)
+    off += 128
+    start_timestamp_us = struct.unpack_from("<Q", data, off)[0]
+    off += 8
+    usb_type = _read_cstring(data[off:off + 8], 8)
+    off += 8
     rgb_codec, depth_codec, rgb_quality, zstd_level = struct.unpack_from("<BBBB", data, off)
+    off += 4
+
+    reserved = data[off:off + 128]
+    off += 128
+
+    if off != HEADER_SIZE:
+        raise ValueError(f"Header parse ended at {off}, expected {HEADER_SIZE}")
 
     return EgorecHeader(
         magic=magic,
@@ -263,11 +284,13 @@ def read_header(data: bytes) -> EgorecHeader:
         depth_codec=depth_codec,
         rgb_quality=rgb_quality,
         zstd_level=zstd_level,
+        reserved=reserved,
     )
 
 
 def read_footer(data: bytes) -> EgorecFooter:
     """Parse an EgorecFooter from raw bytes (must be exactly FOOTER_SIZE bytes)."""
+
     if len(data) < FOOTER_SIZE:
         raise ValueError(f"Need at least {FOOTER_SIZE} bytes for footer, got {len(data)}")
 
@@ -275,7 +298,8 @@ def read_footer(data: bytes) -> EgorecFooter:
         struct.unpack_from("<IQIQQI", data, 0)
     )
 
-    # Validate footer magic
+    if index_magic != INDEX_MAGIC:
+        raise ValueError(f"Invalid index magic: 0x{index_magic:08X}")
     if footer_magic != FOOTER_MAGIC:
         raise ValueError(f"Invalid footer magic: 0x{footer_magic:08X}")
 
@@ -295,15 +319,14 @@ def read_metadata(path: str | Path) -> EgorecMetadata:
     Only reads the first HEADER_SIZE bytes and last FOOTER_SIZE bytes,
     so it's fast even for multi-GB files.
     """
+
     path = Path(path)
     file_size = path.stat().st_size
 
     with open(path, "rb") as f:
-        # Read header
         header_data = f.read(HEADER_SIZE)
         header = read_header(header_data)
 
-        # Read footer (last FOOTER_SIZE bytes)
         footer = None
         if file_size >= HEADER_SIZE + FOOTER_SIZE:
             f.seek(file_size - FOOTER_SIZE)
@@ -311,7 +334,7 @@ def read_metadata(path: str | Path) -> EgorecMetadata:
             try:
                 footer = read_footer(footer_data)
             except ValueError:
-                pass  # Incomplete file, no footer yet
+                pass
 
     return EgorecMetadata(
         header=header,

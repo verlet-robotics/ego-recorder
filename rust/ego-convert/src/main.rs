@@ -63,8 +63,20 @@ enum Commands {
         #[arg(long)]
         dataset_tags: Option<String>,
     },
-    /// Extract browser-playable MP4 from .egorec files
+    /// Extract browser-playable MP4 from .egorec files (full decode + re-encode)
     Mp4 {
+        /// .egorec v2 file paths
+        #[arg(required = true)]
+        files: Vec<String>,
+        /// Output directory (default: same dir as input file)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Suppress progress output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+    /// Fast proxy MP4 via H.264 remux (no decode/encode, requires ffmpeg in PATH)
+    Proxy {
         /// .egorec v2 file paths
         #[arg(required = true)]
         files: Vec<String>,
@@ -154,6 +166,13 @@ fn main() -> anyhow::Result<()> {
             quiet,
         } => {
             commands::mp4::run(&files, output.as_deref(), quiet)?;
+        }
+        Commands::Proxy {
+            files,
+            output,
+            quiet,
+        } => {
+            commands::proxy::run(&files, output.as_deref(), quiet)?;
         }
         Commands::Import {
             video,

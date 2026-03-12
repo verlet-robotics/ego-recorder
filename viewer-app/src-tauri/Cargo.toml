@@ -1,0 +1,39 @@
+[package]
+name = "egorec-viewer"
+version = "0.1.0"
+description = "Egorec Viewer — desktop app for reviewing .egorec recordings"
+edition = "2021"
+
+[lib]
+name = "egorec_viewer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+egorec = { path = "../../rust/egorec" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+env_logger = "0.11"
+walkdir = "2"
+rfd = "0.15"
+thiserror = "2"
+axum = "0.8"
+tokio-util = { version = "0.7", features = ["rt", "io"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+urlencoding = "2"
+sha1 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+opt-level = 1

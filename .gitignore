@@ -10,8 +10,10 @@ imgui.ini
 __pycache__/
 .venv/
 rust/target/
+**/target/
 scripts/librealsense/
 datasets/
 recordings/
 test/
 node_modules/
+curation-workspace/

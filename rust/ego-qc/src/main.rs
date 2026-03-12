@@ -3,7 +3,10 @@ mod commands;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "ego-qc", about = "Quality control tools for .egorec v2 recordings")]
+#[command(
+    name = "ego-qc",
+    about = "Quality control tools for .egorec v2 recordings"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -98,6 +101,41 @@ enum Commands {
         #[arg(short, long)]
         quiet: bool,
     },
+    /// Export an arbitrary time range from one .egorec file
+    Clip {
+        /// Source .egorec file
+        input: String,
+        /// Start time in seconds from recording start
+        #[arg(long)]
+        start: f64,
+        /// End time in seconds from recording start
+        #[arg(long)]
+        end: f64,
+        /// Output .egorec clip path
+        #[arg(short, long)]
+        output: String,
+    },
+    /// Export conservative active interval proposals as JSON
+    Intervals {
+        /// .egorec file or directory paths
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Minimum idle gap in seconds before proposing a split (default: 10)
+        #[arg(long)]
+        min_gap: Option<f64>,
+        /// Minimum interval duration in seconds (default: 2)
+        #[arg(long)]
+        min_duration: Option<f64>,
+        /// Padding around each interval in seconds (default: 1)
+        #[arg(long)]
+        pad: Option<f64>,
+        /// Station baseline profile (from calibrate --save-profile)
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Restore a pruned/spliced original from .pruned/
     Restore {
         /// Dataset directory
@@ -123,7 +161,13 @@ fn main() -> anyhow::Result<()> {
             activity_k,
             profile,
         } => {
-            commands::analyze::run(&paths, verbose, report.as_deref(), activity_k, profile.as_deref())?;
+            commands::analyze::run(
+                &paths,
+                verbose,
+                report.as_deref(),
+                activity_k,
+                profile.as_deref(),
+            )?;
         }
         Commands::Calibrate {
             paths,
@@ -150,7 +194,13 @@ fn main() -> anyhow::Result<()> {
         } => {
             let min_gap_frames = min_gap.map(|s| (s * 30.0) as u64);
             let min_dur_frames = min_duration.map(|s| (s * 30.0) as u64);
-            commands::splice::run(&paths, min_gap_frames, min_dur_frames, replace_original, profile.as_deref())?;
+            commands::splice::run(
+                &paths,
+                min_gap_frames,
+                min_dur_frames,
+                replace_original,
+                profile.as_deref(),
+            )?;
         }
         Commands::Mp4 {
             files,
@@ -158,6 +208,31 @@ fn main() -> anyhow::Result<()> {
             quiet,
         } => {
             commands::mp4::run(&files, output.as_deref(), quiet)?;
+        }
+        Commands::Clip {
+            input,
+            start,
+            end,
+            output,
+        } => {
+            commands::clip::run(&input, start, end, &output)?;
+        }
+        Commands::Intervals {
+            paths,
+            output,
+            min_gap,
+            min_duration,
+            pad,
+            profile,
+        } => {
+            commands::intervals::run(
+                &paths,
+                output.as_deref(),
+                min_gap.map(|s| (s * 30.0) as u64),
+                min_duration.map(|s| (s * 30.0) as u64),
+                pad.map(|s| (s * 30.0) as u64),
+                profile.as_deref(),
+            )?;
         }
         Commands::Restore { dataset, filename } => {
             commands::restore::run(&dataset, &filename)?;

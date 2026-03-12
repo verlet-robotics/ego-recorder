@@ -159,6 +159,14 @@ pub struct FrameIterator {
     trailing_flushed: bool,
 }
 
+fn relative_timestamp_s(frame_timestamp_us: u64, start_timestamp_us: u64) -> f64 {
+    if start_timestamp_us > 0 {
+        frame_timestamp_us.saturating_sub(start_timestamp_us) as f64 / 1e6
+    } else {
+        0.0
+    }
+}
+
 impl Iterator for FrameIterator {
     type Item = Result<DecodedFrame, EgorecError>;
 
@@ -286,11 +294,8 @@ impl FrameIterator {
         };
 
         // Compute relative timestamp
-        let timestamp_relative_s = if self.reader.header.start_timestamp_us > 0 {
-            (fbh.timestamp_us - self.reader.header.start_timestamp_us) as f64 / 1e6
-        } else {
-            0.0
-        };
+        let timestamp_relative_s =
+            relative_timestamp_s(fbh.timestamp_us, self.reader.header.start_timestamp_us);
 
         self.current_frame += 1;
 
@@ -326,5 +331,20 @@ impl FrameIterator {
             self.h264_decoder.flush()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relative_timestamp_s;
+
+    #[test]
+    fn relative_timestamp_uses_delta_when_frame_follows_start() {
+        assert_eq!(relative_timestamp_s(2_500_000, 1_000_000), 1.5);
+    }
+
+    #[test]
+    fn relative_timestamp_saturates_when_frame_precedes_start() {
+        assert_eq!(relative_timestamp_s(900_000, 1_000_000), 0.0);
     }
 }

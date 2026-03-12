@@ -492,6 +492,13 @@ install_python_export() {
     fi
 
     # RLDS export deps
+    if [[ -f "${PROJECT_DIR}/python/requirements-curation.txt" ]]; then
+        info "Installing curation dependencies..."
+        python3 -m pip install -r "${PROJECT_DIR}/python/requirements-curation.txt"
+        ok "Curation dependencies installed"
+    fi
+
+    # RLDS export deps
     if [[ -f "${PROJECT_DIR}/python/requirements-rlds.txt" ]]; then
         info "Installing RLDS export dependencies..."
         python3 -m pip install -r "${PROJECT_DIR}/python/requirements-rlds.txt"

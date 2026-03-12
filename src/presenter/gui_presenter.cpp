@@ -394,27 +394,34 @@ bool GuiPresenter::tick()
     }
 
     // ------------------------------------------------------------------
-    // 10. Keyboard shortcuts (only when ImGui is not eating keyboard)
+    // 10. Keyboard shortcuts
     // ------------------------------------------------------------------
+    // Space is a global recording toggle -- it must work even when the
+    // Session Name InputText has keyboard focus.  We check it outside the
+    // WantCaptureKeyboard guard so the user can press Space at any time.
+    // If the InputText was active we clear it to avoid typing a stray ' '.
     {
         ImGuiIO& io = ImGui::GetIO();
-        if (!io.WantCaptureKeyboard) {
-            if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
-                if (!session_name_.empty()) {
-                    if (recording_) {
-                        recording_ = false;
-                        if (on_stop_recording_) on_stop_recording_();
-                    } else if (countdown_active_) {
-                        // Space during countdown -- cancel it
-                        countdown_active_ = false;
-                    } else {
-                        countdown_active_ = true;
-                        countdown_start_  = glfwGetTime();
-                    }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
+            if (!session_name_.empty()) {
+                if (io.WantCaptureKeyboard) {
+                    ImGui::ClearActiveID();
+                }
+                if (recording_) {
+                    recording_ = false;
+                    if (on_stop_recording_) on_stop_recording_();
+                } else if (countdown_active_) {
+                    countdown_active_ = false;
+                } else {
+                    countdown_active_ = true;
+                    countdown_start_  = glfwGetTime();
                 }
             }
+        }
+
+        if (!io.WantCaptureKeyboard) {
             if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
-                // Cycle: RGB_ONLY -> DEPTH_ONLY -> SIDE_BY_SIDE -> RGB_ONLY
                 switch (view_mode_) {
                     case ViewMode::RGB_ONLY:    view_mode_ = ViewMode::DEPTH_ONLY;   break;
                     case ViewMode::DEPTH_ONLY:  view_mode_ = ViewMode::SIDE_BY_SIDE; break;
@@ -423,14 +430,11 @@ bool GuiPresenter::tick()
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 if (countdown_active_) {
-                    // Cancel countdown
                     countdown_active_ = false;
                 } else if (recording_) {
-                    // Cancel running recording
                     recording_ = false;
                     if (on_stop_recording_) on_stop_recording_();
                 } else {
-                    // No recording active -- quit
                     ImGui::Render();
                     int fw2 = 0, fh2 = 0;
                     glfwGetFramebufferSize(window_, &fw2, &fh2);

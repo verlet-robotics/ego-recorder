@@ -568,6 +568,7 @@ name = "ego-convert"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "byteorder",
  "clap",
  "egorec",
  "ffmpeg-next",
