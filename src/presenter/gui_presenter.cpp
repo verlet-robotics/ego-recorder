@@ -406,7 +406,11 @@ bool GuiPresenter::tick()
         if (ImGui::IsKeyPressed(ImGuiKey_Space)) {
             if (!session_name_.empty()) {
                 if (io.WantCaptureKeyboard) {
-                    ImGui::ClearActiveID();
+                    // Clear focus from any active widget so Space acts
+                    // as a global hotkey.  Uses only public API so it
+                    // works across Dear ImGui versions without
+                    // imgui_internal.h.
+                    ImGui::SetWindowFocus(nullptr);
                 }
                 if (recording_) {
                     recording_ = false;
