@@ -78,10 +78,14 @@ protected:
 
     void SetUp() override {
         depth_bytes.resize(DEPTH_SIZE);
-        // Simulate Z16 depth with realistic-ish values
+        // Use PRNG-generated data that has enough entropy for level 1
+        // to leave room for improvement, so higher levels consistently
+        // produce smaller output across all zstd versions.
+        std::mt19937 rng(42);
         auto* ptr = reinterpret_cast<uint16_t*>(depth_bytes.data());
+        std::uniform_int_distribution<uint16_t> dist(800, 3000);
         for (size_t i = 0; i < DEPTH_SIZE / 2; i++) {
-            ptr[i] = static_cast<uint16_t>(1000 + (i % 500));
+            ptr[i] = dist(rng);
         }
     }
 };
