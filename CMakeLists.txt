@@ -61,6 +61,7 @@ FetchContent_Declare(
     cxxopts
     GIT_REPOSITORY https://github.com/jarro2783/cxxopts.git
     GIT_TAG        v3.3.1
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(cxxopts)
 
@@ -69,6 +70,7 @@ FetchContent_Declare(
     tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
     GIT_TAG        v3.4.0
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(tomlplusplus)
 
@@ -97,6 +99,7 @@ FetchContent_Declare(
     zdepth
     GIT_REPOSITORY https://github.com/catid/Zdepth.git
     GIT_TAG        master
+    GIT_SHALLOW    TRUE
 )
 # Prevent Zdepth's install(EXPORT) from failing because our 'zstd' interface
 # target is not in its export set. We add our zstd target to the export set
@@ -117,6 +120,7 @@ if(WITH_PYTHON)
         pybind11
         GIT_REPOSITORY https://github.com/pybind/pybind11.git
         GIT_TAG        v2.13.6
+        GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(pybind11)
 
@@ -173,6 +177,7 @@ if(WITH_GUI)
         imgui
         GIT_REPOSITORY https://github.com/ocornut/imgui.git
         GIT_TAG        v1.92.6
+        GIT_SHALLOW    TRUE
     )
     FetchContent_MakeAvailable(imgui)
 
@@ -277,6 +282,7 @@ if(BUILD_TESTS)
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
         GIT_TAG        v1.15.2
+        GIT_SHALLOW    TRUE
     )
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
