@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <optional>
 #include <stdexcept>
 
@@ -159,20 +160,42 @@ std::optional<CapturedFrame> RealSensePipeline::poll_frame(unsigned int timeout_
 
     // Copy RGB data into the CapturedFrame vector.
     // IMPORTANT: color.get_data() is only valid while `frames` is alive.
-    // The vector::assign performs a memcpy, so data is owned by cf after this.
+    // Strip stride padding (if any) so rgb_data is tightly packed width*3
+    // per row, matching what downstream code (preview, encoder) expects.
     {
         const auto* ptr = static_cast<const uint8_t*>(color.get_data());
         const int stride = color.get_stride_in_bytes();
-        const int height = color.get_height();
-        cf.rgb_data.assign(ptr, ptr + stride * height);
+        const int w = color.get_width();
+        const int h = color.get_height();
+        const int row_bytes = w * 3;  // RGB8 = 3 bytes/pixel
+        if (stride == row_bytes) {
+            cf.rgb_data.assign(ptr, ptr + row_bytes * h);
+        } else {
+            cf.rgb_data.resize(static_cast<size_t>(row_bytes) * h);
+            for (int y = 0; y < h; ++y) {
+                std::memcpy(cf.rgb_data.data() + y * row_bytes,
+                            ptr + y * stride, row_bytes);
+            }
+        }
     }
 
     // Copy depth data into the CapturedFrame vector.
+    // Same stride-stripping as RGB for consistency.
     {
         const auto* ptr = static_cast<const uint8_t*>(depth.get_data());
         const int stride = depth.get_stride_in_bytes();
-        const int height = depth.get_height();
-        cf.depth_data.assign(ptr, ptr + stride * height);
+        const int w = depth.get_width();
+        const int h = depth.get_height();
+        const int row_bytes = w * 2;  // Z16 = 2 bytes/pixel
+        if (stride == row_bytes) {
+            cf.depth_data.assign(ptr, ptr + row_bytes * h);
+        } else {
+            cf.depth_data.resize(static_cast<size_t>(row_bytes) * h);
+            for (int y = 0; y < h; ++y) {
+                std::memcpy(cf.depth_data.data() + y * row_bytes,
+                            ptr + y * stride, row_bytes);
+            }
+        }
     }
 
     // Collect IMU samples if IMU is enabled (D435i mode).

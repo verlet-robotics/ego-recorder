@@ -107,10 +107,10 @@ private:
     std::atomic<int>      active_buf_{0};
     std::atomic<bool>     frame_ready_{false};
 
-    // Working buffers
-    static constexpr int kHalfWidth  = 640;
-    static constexpr int kHalfHeight = 360;
-    std::vector<uint8_t>  half_rgb_;        // 640x360x3 (downscaled RGB)
+    // Working buffers (half-res derived from actual camera resolution)
+    int half_w_;
+    int half_h_;
+    std::vector<uint8_t>  half_rgb_;        // (width/2)x(height/2)x3 (downscaled RGB)
     std::vector<uint8_t>  colorized_buf_;   // full-res depth colorized (width*height*3)
     std::vector<uint8_t>  write_buf_;       // assembled frame(s) for atomic write
 

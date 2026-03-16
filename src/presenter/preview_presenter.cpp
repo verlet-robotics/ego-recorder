@@ -42,6 +42,8 @@ PreviewPresenter::PreviewPresenter(
     , has_imu_(has_imu)
     , width_(width)
     , height_(height)
+    , half_w_(width / 2)
+    , half_h_(height / 2)
 {
     const size_t full_pixels = static_cast<size_t>(width * height);
     // Double buffers for capture thread -> preview thread handoff
@@ -51,7 +53,7 @@ PreviewPresenter::PreviewPresenter(
     depth_buf_[1].resize(full_pixels * 2, 0);
 
     // Half-res RGB working buffer
-    const size_t half_pixels = static_cast<size_t>(kHalfWidth * kHalfHeight);
+    const size_t half_pixels = static_cast<size_t>(half_w_ * half_h_);
     half_rgb_.resize(half_pixels * 3, 0);
 
     // Full-res depth colorization buffer
@@ -199,7 +201,7 @@ void PreviewPresenter::update_frame(
 void PreviewPresenter::preview_thread_loop()
 {
     // RGB: half-res, low quality (smooth natural image compresses well)
-    JpegCompressor rgb_jpeg(kHalfWidth, kHalfHeight, 30);
+    JpegCompressor rgb_jpeg(half_w_, half_h_, 30);
     // Depth: full-res, higher quality (sparse colored dots on black need it)
     JpegCompressor depth_jpeg(width_, height_, 65);
 
@@ -214,13 +216,13 @@ void PreviewPresenter::preview_thread_loop()
         const uint8_t* rgb_src = rgb_buf_[rd].data();
         const uint8_t* depth_src = depth_buf_[rd].data();
 
-        // Nearest-neighbor downscale RGB: 1280x720 -> 640x360
-        for (int y = 0; y < kHalfHeight; ++y) {
+        // Nearest-neighbor downscale RGB to half resolution
+        for (int y = 0; y < half_h_; ++y) {
             int src_y = y * 2;
-            for (int x = 0; x < kHalfWidth; ++x) {
+            for (int x = 0; x < half_w_; ++x) {
                 int src_x = x * 2;
                 int src_idx = src_y * width_ + src_x;
-                int dst_idx = y * kHalfWidth + x;
+                int dst_idx = y * half_w_ + x;
                 half_rgb_[dst_idx * 3 + 0] = rgb_src[src_idx * 3 + 0];
                 half_rgb_[dst_idx * 3 + 1] = rgb_src[src_idx * 3 + 1];
                 half_rgb_[dst_idx * 3 + 2] = rgb_src[src_idx * 3 + 2];
@@ -228,7 +230,7 @@ void PreviewPresenter::preview_thread_loop()
         }
 
         // JPEG encode RGB
-        auto [rgb_ptr, rgb_size] = rgb_jpeg.compress(half_rgb_.data(), kHalfWidth, kHalfHeight);
+        auto [rgb_ptr, rgb_size] = rgb_jpeg.compress(half_rgb_.data(), half_w_, half_h_);
 
         // Assemble write buffer
         bool send_depth = depth_enabled_.load(std::memory_order_acquire);
