@@ -79,6 +79,7 @@ if [[ "$BUILD_CPP" == true ]]; then
         cmake -B "$BUILD_DIR" \
             -DWITH_GUI=ON \
             -DWITH_PYTHON=ON \
+            -DFETCHCONTENT_BASE_DIR="${PROJECT_DIR}/.deps" \
             "$PROJECT_DIR"
     fi
 

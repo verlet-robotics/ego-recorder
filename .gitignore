@@ -1,6 +1,7 @@
 .env
 build/
 build_*/
+.deps/
 *.deb
 *.o
 *.a
