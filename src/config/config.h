@@ -18,13 +18,14 @@ struct Config {
     int jpeg_quality = 90;  ///< JPEG quality 1-100 (default 90)
     int zstd_level   = 1;   ///< ZSTD compression level 1-22 (default 1, fastest)
     int h264_crf     = 23;  ///< H.264 CRF quality 0-51 (default 23)
+    std::string h264_preset = "ultrafast";  ///< x264 preset (ultrafast/superfast/veryfast/fast)
 
     // [camera]
-    int frame_width  = 1280;  ///< Capture resolution width  (must be multiple of 8)
-    int frame_height = 720;   ///< Capture resolution height (must be multiple of 8)
+    int frame_width  = 848;   ///< Capture resolution width  (must be multiple of 8)
+    int frame_height = 480;   ///< Capture resolution height (must be multiple of 8)
 
     // [recording]
-    int      queue_size    = 4;    ///< Bounded capture queue depth (2-16)
+    int      queue_size    = 8;    ///< Bounded capture queue depth (2-16)
     int      warmup_frames = 30;   ///< Camera warmup frames to skip before recording
     uint64_t disk_min_mb   = 500;  ///< Stop recording when free disk drops below this (MB)
 

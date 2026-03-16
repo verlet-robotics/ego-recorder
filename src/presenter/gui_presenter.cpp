@@ -7,16 +7,21 @@
 #include "presenter/gui_presenter.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_stdlib.h>
 
 #include <GLFW/glfw3.h>
 
+#include "utils/audio_alert.h"
+#include "utils/depth_colorizer.h"
+
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -237,6 +242,14 @@ bool GuiPresenter::tick()
         if (!dataset_name_.empty()) {
             ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f),
                 "Dataset: %s", dataset_name_.c_str());
+            if (episode_count_ > 0) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                    "  Episode %d", episode_count_);
+            }
+        } else if (episode_count_ > 0) {
+            ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                "Episode %d", episode_count_);
         }
 
         // Session name input
@@ -261,10 +274,12 @@ bool GuiPresenter::tick()
                 recording_ = false;
                 if (on_stop_recording_) on_stop_recording_();
             } else if (countdown_active_) {
-                countdown_active_ = false;
+                countdown_active_    = false;
+                countdown_last_beep_ = -1;
             } else {
-                countdown_active_ = true;
-                countdown_start_  = glfwGetTime();
+                countdown_active_    = true;
+                countdown_start_     = glfwGetTime();
+                countdown_last_beep_ = -1;
             }
         }
         if (name_empty) ImGui::EndDisabled();
@@ -343,6 +358,61 @@ bool GuiPresenter::tick()
     }
 
     // ------------------------------------------------------------------
+    // 9a. Recording viewfinder overlay -- top-left, visible during recording
+    // ------------------------------------------------------------------
+    if (stat_is_recording_) {
+        const float overlay_margin = 10.0f;
+        ImGui::SetNextWindowPos(
+            ImVec2(overlay_margin, overlay_margin),
+            ImGuiCond_Always,
+            ImVec2(0.0f, 0.0f)  // pivot: left edge, top
+        );
+        ImGui::SetNextWindowBgAlpha(0.4f);
+
+        const ImGuiWindowFlags rec_flags =
+            ImGuiWindowFlags_NoDecoration         |
+            ImGuiWindowFlags_AlwaysAutoResize      |
+            ImGuiWindowFlags_NoFocusOnAppearing    |
+            ImGuiWindowFlags_NoNav                 |
+            ImGuiWindowFlags_NoMove                |
+            ImGuiWindowFlags_NoInputs;
+
+        ImGui::Begin("RecIndicator", nullptr, rec_flags);
+        {
+            // Blinking red dot + REC label
+            const bool blink_on = std::fmod(glfwGetTime(), 1.6) < 0.8;
+            ImVec2 cursor = ImGui::GetCursorScreenPos();
+
+            if (blink_on) {
+                ImGui::GetWindowDrawList()->AddCircleFilled(
+                    ImVec2(cursor.x + 8.0f, cursor.y + 8.0f),
+                    6.0f,
+                    IM_COL32(255, 50, 50, 255)
+                );
+            }
+            ImGui::Dummy(ImVec2(18.0f, 16.0f));
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "REC");
+            ImGui::SameLine();
+
+            // Timer MM:SS in larger font
+            const int rec_s = static_cast<int>(stat_rec_elapsed_);
+            ImGui::SetWindowFontScale(2.0f);
+            ImGui::Text("%02d:%02d", rec_s / 60, rec_s % 60);
+            ImGui::SetWindowFontScale(1.0f);
+
+            // Frame count
+            ImGui::Text("Frames: %llu", (unsigned long long)stat_written_);
+
+            // Episode count (if any completed)
+            if (episode_count_ > 0) {
+                ImGui::Text("Episode %d", episode_count_ + 1);
+            }
+        }
+        ImGui::End();
+    }
+
+    // ------------------------------------------------------------------
     // 9b. Countdown overlay -- large centered number over the preview
     // ------------------------------------------------------------------
     if (countdown_active_) {
@@ -351,12 +421,20 @@ bool GuiPresenter::tick()
 
         if (remaining <= 0) {
             // Countdown finished -- start recording
-            countdown_active_ = false;
+            countdown_active_    = false;
+            countdown_last_beep_ = -1;
             recording_ = true;
+            // "Go" beep: higher pitch, longer duration
+            std::thread([]{ play_beep(1200, 300); }).detach();
             if (on_start_recording_) on_start_recording_();
         } else {
+            // Play beep for each new countdown second (fire-and-forget thread)
+            if (remaining != countdown_last_beep_) {
+                countdown_last_beep_ = remaining;
+                std::thread([]{ play_beep(800, 150); }).detach();
+            }
             // Draw centered countdown number
-            char count_text[4];
+            char count_text[16];
             std::snprintf(count_text, sizeof(count_text), "%d", remaining);
 
             // Semi-transparent full-screen backdrop over the preview area
@@ -412,10 +490,12 @@ bool GuiPresenter::tick()
                     recording_ = false;
                     if (on_stop_recording_) on_stop_recording_();
                 } else if (countdown_active_) {
-                    countdown_active_ = false;
+                    countdown_active_    = false;
+                    countdown_last_beep_ = -1;
                 } else {
-                    countdown_active_ = true;
-                    countdown_start_  = glfwGetTime();
+                    countdown_active_    = true;
+                    countdown_start_     = glfwGetTime();
+                    countdown_last_beep_ = -1;
                 }
             }
         }
@@ -430,7 +510,8 @@ bool GuiPresenter::tick()
             }
             if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 if (countdown_active_) {
-                    countdown_active_ = false;
+                    countdown_active_    = false;
+                    countdown_last_beep_ = -1;
                 } else if (recording_) {
                     recording_ = false;
                     if (on_stop_recording_) on_stop_recording_();
@@ -549,52 +630,8 @@ void GuiPresenter::update_frame(
     frame_ready_ = true;
 }
 
-// ---------------------------------------------------------------------------
-// Turbo colormap LUT (Google, 2019) -- 256 entries, perceptually uniform.
-// Source: https://gist.github.com/mikhailov-work/0d177465a8151eb6ede1768d51d476c7
-// License: Apache 2.0
-// ---------------------------------------------------------------------------
-static const uint8_t kTurboLUT[256][3] = {
-    {48,18,59},{50,21,67},{51,24,74},{52,27,81},{53,30,88},{54,33,95},{55,36,102},{56,39,109},
-    {57,42,115},{58,45,121},{59,47,128},{60,50,134},{61,53,139},{62,56,145},{63,58,150},{63,61,156},
-    {64,64,161},{65,66,166},{65,69,171},{66,72,176},{66,74,180},{67,77,185},{68,79,189},{68,82,193},
-    {69,84,197},{69,87,201},{70,89,205},{70,92,209},{71,94,212},{71,97,216},{71,99,219},{72,101,223},
-    {72,104,226},{72,106,229},{72,108,232},{72,111,235},{72,113,237},{72,115,240},{72,118,242},{72,120,244},
-    {72,122,246},{71,125,248},{71,127,250},{71,129,251},{71,131,253},{70,134,254},{70,136,255},{70,138,255},
-    {69,140,255},{69,142,255},{68,145,255},{68,147,255},{67,149,255},{66,151,255},{66,153,255},{65,155,254},
-    {64,157,254},{63,159,253},{63,161,252},{62,163,252},{61,165,251},{60,167,250},{59,169,249},{58,170,248},
-    {57,172,247},{56,174,246},{55,176,244},{54,178,243},{53,179,241},{52,181,240},{51,183,238},{50,184,236},
-    {49,186,234},{48,188,233},{47,189,231},{46,191,229},{45,192,227},{44,194,225},{43,195,223},{42,197,221},
-    {42,198,218},{41,200,216},{40,201,214},{39,203,212},{38,204,209},{37,206,207},{36,207,205},{35,208,202},
-    {34,210,200},{33,211,197},{33,213,195},{32,214,192},{31,215,190},{31,217,187},{30,218,185},{29,219,182},
-    {29,221,180},{28,222,177},{28,223,174},{27,225,172},{27,226,169},{26,227,166},{26,228,164},{25,230,161},
-    {25,231,158},{24,232,155},{24,233,153},{24,234,150},{23,236,147},{23,237,144},{23,238,142},{23,239,139},
-    {23,240,136},{23,241,133},{24,242,131},{24,243,128},{24,243,125},{25,244,122},{25,245,120},{26,246,117},
-    {27,247,114},{27,248,111},{28,248,108},{29,249,106},{30,250,103},{31,250,100},{32,251,97},{33,252,95},
-    {35,252,92},{36,253,89},{37,253,87},{39,254,84},{40,254,81},{42,254,79},{43,255,76},{45,255,73},
-    {47,255,71},{49,255,68},{51,255,66},{53,255,63},{55,255,61},{57,255,58},{60,255,56},{62,255,54},
-    {64,255,51},{67,254,49},{69,254,47},{72,254,45},{74,254,43},{77,253,41},{79,253,39},{82,253,37},
-    {84,252,36},{87,252,34},{89,251,33},{92,251,31},{94,250,30},{97,250,28},{99,249,27},{102,249,26},
-    {105,248,25},{107,248,24},{110,247,23},{112,246,22},{115,246,21},{118,245,21},{120,245,20},{123,244,20},
-    {125,243,19},{128,243,19},{131,242,19},{133,241,19},{136,241,18},{138,240,18},{141,239,18},{144,239,18},
-    {146,238,19},{149,237,19},{151,237,19},{154,236,20},{156,235,20},{159,235,21},{161,234,21},{164,233,22},
-    {166,233,23},{169,232,23},{171,231,24},{174,230,25},{176,230,26},{179,229,27},{181,228,28},{183,227,29},
-    {186,227,30},{188,226,31},{191,225,33},{193,224,34},{195,223,35},{198,223,37},{200,222,38},{202,221,40},
-    {205,220,41},{207,219,43},{209,219,44},{212,218,46},{214,217,48},{216,216,49},{218,216,51},{221,215,53},
-    {223,214,55},{225,213,57},{227,213,59},{229,212,61},{231,211,63},{233,211,65},{235,210,67},{237,209,69},
-    {239,209,71},{240,208,74},{242,207,76},{244,207,78},{245,206,80},{247,206,83},{248,205,85},{250,204,87},
-    {251,204,90},{252,203,92},{254,203,95},{255,202,97},{255,201,100},{255,201,102},{255,200,105},{255,200,108},
-    {255,199,110},{255,198,113},{255,198,116},{255,197,118},{255,197,121},{255,196,124},{255,195,127},{255,195,129},
-    {255,194,132},{255,194,135},{255,193,138},{255,192,141},{255,192,143},{255,191,146},{255,190,149},{255,190,152},
-    {254,189,154},{254,189,157},{254,188,160},{253,187,163},{253,187,165},{252,186,168},{252,185,171},{251,185,174},
-};
-
-// colorize_depth()  -- histogram-equalized turbo colormap
-// ---------------------------------------------------------------------------
-// Two-pass: (1) build histogram, find 2nd/98th percentile range,
-//           (2) normalize each pixel to [0,1] within that range and look up turbo LUT.
-// This matches the approach used by librealsense's rs2::colorizer.
-
+// GuiPresenter::colorize_depth delegates to shared utility in depth_colorizer.cpp
+// (the kTurboLUT and algorithm now live in utils/depth_colorizer.h/.cpp)
 void GuiPresenter::colorize_depth(
     const uint16_t* depth,
     uint8_t*        out_rgb,
@@ -602,67 +639,7 @@ void GuiPresenter::colorize_depth(
     int             height
 )
 {
-    const int n = width * height;
-
-    // Pass 1: histogram of non-zero depth values
-    uint32_t hist[65536] = {};
-    int valid_count = 0;
-    for (int i = 0; i < n; ++i) {
-        if (depth[i] != 0) {
-            hist[depth[i]]++;
-            valid_count++;
-        }
-    }
-
-    // If no valid depth, fill black and return
-    if (valid_count == 0) {
-        std::memset(out_rgb, 0, n * 3);
-        return;
-    }
-
-    // Find 2nd and 98th percentile raw values
-    const int low_cut  = valid_count * 2  / 100;
-    const int high_cut = valid_count * 98 / 100;
-    uint16_t d_min = 1, d_max = 65535;
-    int cum = 0;
-    bool found_min = false;
-    for (int v = 1; v < 65536; ++v) {
-        cum += hist[v];
-        if (!found_min && cum >= low_cut) {
-            d_min = static_cast<uint16_t>(v);
-            found_min = true;
-        }
-        if (cum >= high_cut) {
-            d_max = static_cast<uint16_t>(v);
-            break;
-        }
-    }
-
-    // Avoid division by zero
-    if (d_max <= d_min) d_max = d_min + 1;
-
-    const float inv_range = 255.0f / static_cast<float>(d_max - d_min);
-
-    // Pass 2: colorize with turbo LUT
-    for (int i = 0; i < n; ++i) {
-        const uint16_t raw = depth[i];
-        if (raw == 0) {
-            out_rgb[i * 3 + 0] = 0;
-            out_rgb[i * 3 + 1] = 0;
-            out_rgb[i * 3 + 2] = 0;
-            continue;
-        }
-
-        // Normalize to [0, 255] LUT index
-        int idx;
-        if (raw <= d_min) idx = 0;
-        else if (raw >= d_max) idx = 255;
-        else idx = static_cast<int>(static_cast<float>(raw - d_min) * inv_range + 0.5f);
-
-        out_rgb[i * 3 + 0] = kTurboLUT[idx][0];
-        out_rgb[i * 3 + 1] = kTurboLUT[idx][1];
-        out_rgb[i * 3 + 2] = kTurboLUT[idx][2];
-    }
+    ::colorize_depth(depth, out_rgb, width, height);
 }
 
 #endif // HAVE_GUI

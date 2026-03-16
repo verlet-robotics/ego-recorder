@@ -396,6 +396,9 @@ install_system_deps() {
         packages+=(python3-dev)
     fi
 
+    # D-Bus — compile-time (zbus crate) + runtime (lid-close inhibitor)
+    packages+=(libdbus-1-dev dbus)
+
     # systemd integration
     packages+=(libsystemd-dev)
 

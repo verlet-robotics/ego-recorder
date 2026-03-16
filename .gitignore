@@ -16,4 +16,5 @@ datasets/
 recordings/
 test/
 node_modules/
+dist/
 curation-workspace/

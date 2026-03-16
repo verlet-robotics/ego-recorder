@@ -139,6 +139,9 @@ install_deps() {
         packages+=(libglfw3-dev libopengl-dev)
     fi
 
+    # D-Bus — compile-time (zbus crate) + runtime (lid-close inhibitor)
+    packages+=(libdbus-1-dev dbus)
+
     # Tauri / WebKit deps for dataset viewer app
     if [[ "$WITH_VIEWER" == true ]]; then
         packages+=(
@@ -146,6 +149,11 @@ install_deps() {
             libxdo-dev
             libayatana-appindicator3-dev
             librsvg2-dev
+            # X11/XCB — required by Tauri's windowing on Linux
+            libxcb-render0-dev
+            libxcb-shape0-dev
+            libxcb-xfixes0-dev
+            libxkbcommon-x11-dev
         )
     fi
 

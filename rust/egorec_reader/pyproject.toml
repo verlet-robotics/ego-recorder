@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "egorec-reader"
+version = "0.1.0"
+description = "Python bindings for reading .egorec v2 files (hand detection in intervals)"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "egorec_reader"

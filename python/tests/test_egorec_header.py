@@ -106,6 +106,23 @@ class EgorecHeaderTests(unittest.TestCase):
         self.assertAlmostEqual(meta.duration_s, 20.0)
         self.assertAlmostEqual(meta.fps, 30.0)
         self.assertEqual(meta.header.session_name, "session-abc")
+        self.assertTrue(meta.video_streamable)
+        self.assertIsNone(meta.video_stream_error)
+
+    def test_to_episode_dict_includes_streamability_metadata(self) -> None:
+        header_bytes = _build_header_bytes()
+        footer_bytes = _build_footer_bytes()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "sample.egorec"
+            path.write_bytes(header_bytes + b"\x00" * 64 + footer_bytes)
+            meta = egorec_header.read_metadata(path)
+
+        episode = meta.to_episode_dict()
+        self.assertEqual(episode["rgb_codec"], 2)
+        self.assertEqual(episode["depth_codec"], 1)
+        self.assertTrue(episode["video_streamable"])
+        self.assertIsNone(episode["video_stream_error"])
 
     def test_read_metadata_tolerates_missing_footer(self) -> None:
         header_bytes = _build_header_bytes()

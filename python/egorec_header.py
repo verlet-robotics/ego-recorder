@@ -16,6 +16,7 @@ from pathlib import Path
 FILE_MAGIC = b"EGOREC\x02\x00"
 FOOTER_MAGIC = 0x454E4F44  # 'DONE'
 INDEX_MAGIC = 0x58444E49   # 'INDX'
+BROWSER_STREAMABLE_RGB_CODEC = 2
 
 # See rust/egorec/src/format.rs FILE_HEADER_SIZE / FileFooter.
 HEADER_SIZE = 472
@@ -149,6 +150,19 @@ class EgorecMetadata:
     def fps(self) -> float:
         return self.footer.fps if self.footer else 0.0
 
+    @property
+    def video_streamable(self) -> bool:
+        return self.header.rgb_codec == BROWSER_STREAMABLE_RGB_CODEC
+
+    @property
+    def video_stream_error(self) -> str | None:
+        if self.video_streamable:
+            return None
+        return (
+            f"rgb_codec={self.header.rgb_codec} is not browser-streamable "
+            f"(need {BROWSER_STREAMABLE_RGB_CODEC} for H.264)"
+        )
+
     def to_episode_dict(self) -> dict:
         """Return metadata as a dict suitable for the facility API registration."""
 
@@ -167,6 +181,10 @@ class EgorecMetadata:
             "has_depth": True,
             "has_imu": self.header.has_imu,
             "intrinsics": self.header.to_intrinsics_dict(),
+            "rgb_codec": self.header.rgb_codec,
+            "depth_codec": self.header.depth_codec,
+            "video_streamable": self.video_streamable,
+            "video_stream_error": self.video_stream_error,
         }
 
 

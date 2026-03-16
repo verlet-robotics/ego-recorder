@@ -32,6 +32,9 @@ public:
     /// Add \p count to the dropped frame counter.
     void frames_dropped(size_t count);
 
+    /// Set the dropped frame counter to an absolute value (for live queue sync).
+    void set_dropped(size_t count);
+
     /// Add \p bytes to the total bytes written counter.
     void bytes_written(size_t bytes);
 

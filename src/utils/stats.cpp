@@ -30,6 +30,10 @@ void Stats::frames_dropped(size_t count) {
     frames_dropped_.fetch_add(static_cast<uint64_t>(count), std::memory_order_relaxed);
 }
 
+void Stats::set_dropped(size_t count) {
+    frames_dropped_.store(static_cast<uint64_t>(count), std::memory_order_relaxed);
+}
+
 void Stats::bytes_written(size_t bytes) {
     bytes_written_.fetch_add(static_cast<uint64_t>(bytes), std::memory_order_relaxed);
 }
@@ -76,7 +80,11 @@ double Stats::recording_elapsed_seconds() const {
 }
 
 double Stats::capture_fps() const {
-    double elapsed = elapsed_seconds();
+    // When recording, use recording elapsed time so the FPS isn't diluted
+    // by preview time before recording started.
+    double elapsed = recording_.load(std::memory_order_acquire)
+        ? recording_elapsed_seconds()
+        : elapsed_seconds();
     if (elapsed < 1e-6) return 0.0;
     return static_cast<double>(captured()) / elapsed;
 }

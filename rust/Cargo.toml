@@ -2,10 +2,12 @@
 members = [
     "zdepth-sys",
     "egorec",
+    "egorec-mp4",
     "tfrecord",
     "lerobot-writer",
     "ego-convert",
     "ego-qc",
+    "egorec_reader",
 ]
 resolver = "2"
 

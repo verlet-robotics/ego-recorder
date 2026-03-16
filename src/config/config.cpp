@@ -36,6 +36,7 @@ Config load_config(const std::string& path) {
     cfg.jpeg_quality = tbl["compression"]["jpeg_quality"].value_or(cfg.jpeg_quality);
     cfg.zstd_level   = tbl["compression"]["zstd_level"].value_or(cfg.zstd_level);
     cfg.h264_crf     = tbl["compression"]["h264_crf"].value_or(cfg.h264_crf);
+    cfg.h264_preset  = tbl["compression"]["h264_preset"].value_or(cfg.h264_preset);
 
     // [camera]
     cfg.frame_width  = tbl["camera"]["width"].value_or(cfg.frame_width);

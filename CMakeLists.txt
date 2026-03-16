@@ -213,6 +213,8 @@ add_executable(ego-recorder
     src/presenter/headless_presenter.cpp
     src/dataset/dataset_manifest.cpp
     src/dataset/dataset_commands.cpp
+    src/utils/depth_colorizer.cpp
+    src/presenter/preview_presenter.cpp
 )
 
 # gui_presenter.cpp is only compiled when WITH_GUI=ON (added in plan 02-02)

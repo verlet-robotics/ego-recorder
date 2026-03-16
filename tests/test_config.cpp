@@ -31,11 +31,11 @@ TEST_F(ConfigTest, DefaultsWhenNoFile) {
     EXPECT_EQ(cfg.jpeg_quality, 90);
     EXPECT_EQ(cfg.zstd_level, 1);
     EXPECT_EQ(cfg.h264_crf, 23);
-    EXPECT_EQ(cfg.queue_size, 4);
+    EXPECT_EQ(cfg.queue_size, 8);
     EXPECT_EQ(cfg.warmup_frames, 30);
     EXPECT_EQ(cfg.disk_min_mb, 500u);
-    EXPECT_EQ(cfg.frame_width, 1280);
-    EXPECT_EQ(cfg.frame_height, 720);
+    EXPECT_EQ(cfg.frame_width, 848);
+    EXPECT_EQ(cfg.frame_height, 480);
     EXPECT_FALSE(cfg.headless);
 }
 
@@ -88,7 +88,7 @@ h264_crf = 30
     // Everything else should be default
     EXPECT_EQ(cfg.output_dir, ".");
     EXPECT_EQ(cfg.jpeg_quality, 90);
-    EXPECT_EQ(cfg.queue_size, 4);
+    EXPECT_EQ(cfg.queue_size, 8);
     EXPECT_FALSE(cfg.headless);
 }
 

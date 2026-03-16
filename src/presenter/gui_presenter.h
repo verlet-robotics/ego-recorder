@@ -79,6 +79,9 @@ public:
     /// Set the dataset name to display above session name input.
     void set_dataset_name(const std::string& name) { dataset_name_ = name; }
 
+    /// Set the number of episodes completed in this session.
+    void set_episode_count(int count) { episode_count_ = count; }
+
     /// Returns true while recording is active.
     bool        is_recording()  const { return recording_; }
 
@@ -133,8 +136,12 @@ private:
 
     // ---- Countdown before recording ----
     static constexpr int kCountdownSeconds = 3;
-    bool   countdown_active_ = false;
-    double countdown_start_  = 0.0;   // glfwGetTime() when countdown began
+    bool   countdown_active_    = false;
+    double countdown_start_     = 0.0;   // glfwGetTime() when countdown began
+    int    countdown_last_beep_ = -1;    // last countdown second that played a beep (-1 = none)
+
+    // ---- Episode tracking ----
+    int episode_count_ = 0;
 
     // ---- Cached stats for overlay ----
     uint64_t stat_captured_      = 0;
