@@ -45,6 +45,9 @@ endif()
 # ---- Dependencies ----
 
 # librealsense2 (typically from ROS or system install)
+# realsense2's DDS support requires fastcdr/fastrtps targets to exist first
+find_package(fastcdr QUIET)
+find_package(fastrtps QUIET)
 find_package(realsense2 REQUIRED)
 
 # PkgConfig for turbojpeg and zstd

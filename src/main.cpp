@@ -37,6 +37,7 @@
 // The FileHeader is assembled in main.cpp (not pipeline.h or storage/) --
 // preserves the Phase 1 pipeline-storage decoupling decision.
 
+#include <csignal>
 #include <cxxopts.hpp>
 
 #include "capture/pipeline.h"

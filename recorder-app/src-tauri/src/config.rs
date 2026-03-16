@@ -20,6 +20,9 @@ pub struct RecorderConfig {
     pub warmup_frames: u32,
     /// H.264 encoder speed preset (ultrafast/superfast/veryfast/fast)
     pub h264_preset: String,
+    /// Prevent display from turning off due to idle while the app is running.
+    /// Manual screen lock (Super+L) still works.
+    pub keep_display_on: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +70,7 @@ impl Default for RecorderConfig {
             default_crf: 23,
             warmup_frames: 30,
             h264_preset: "ultrafast".to_string(),
+            keep_display_on: true,
         }
     }
 }
