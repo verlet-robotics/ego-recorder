@@ -32,7 +32,7 @@ TEST_F(ConfigTest, DefaultsWhenNoFile) {
     EXPECT_EQ(cfg.zstd_level, 1);
     EXPECT_EQ(cfg.h264_crf, 23);
     EXPECT_EQ(cfg.queue_size, 8);
-    EXPECT_EQ(cfg.warmup_frames, 30);
+    EXPECT_EQ(cfg.warmup_frames, 15);
     EXPECT_EQ(cfg.disk_min_mb, 500u);
     EXPECT_EQ(cfg.frame_width, 848);
     EXPECT_EQ(cfg.frame_height, 480);
