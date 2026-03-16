@@ -22,7 +22,7 @@ struct H264Encoder::Impl {
     std::vector<uint8_t> out_buf;  ///< Reusable output buffer (avoids alloc per frame)
 
     /// Initialize all FFmpeg resources for encoding.
-    void init(int width, int height, int fps, int crf) {
+    void init(int width, int height, int fps, int crf, const std::string& preset) {
         // Find the libx264 encoder
         codec = avcodec_find_encoder_by_name("libx264");
         if (!codec) {
@@ -52,7 +52,14 @@ struct H264Encoder::Impl {
         // buffers ~46 frames before emitting output, causing the first N
         // frame blocks to have 0-byte RGB data and misaligning RGB with
         // depth in the written file.
-        av_opt_set(ctx->priv_data, "preset", "fast", 0);
+        //
+        // "ultrafast" is critical for maintaining 30fps at 1280x720 on
+        // laptop CPUs. "fast" uses ~7-25ms/frame depending on CPU, which
+        // leaves no headroom for Zdepth compression + I/O within the 33ms
+        // budget. "ultrafast" cuts encoding time by ~2.5x with slightly
+        // larger files but identical visual quality at the same CRF —
+        // an acceptable trade-off since VLMs downsample to 224x224 anyway.
+        av_opt_set(ctx->priv_data, "preset", preset.c_str(), 0);
         av_opt_set(ctx->priv_data, "tune", "zerolatency", 0);
         av_opt_set(ctx->priv_data, "crf", std::to_string(crf).c_str(), 0);
 
@@ -144,12 +151,14 @@ struct H264Encoder::Impl {
     }
 };
 
-H264Encoder::H264Encoder(int width, int height, int fps, int crf)
+H264Encoder::H264Encoder(int width, int height, int fps, int crf,
+                         const std::string& preset)
     : impl_(std::make_unique<Impl>())
     , width_(width)
     , height_(height)
     , fps_(fps)
     , crf_(crf)
+    , preset_(preset)
 {
     // YUV420P requires even dimensions
     if (width % 2 != 0 || height % 2 != 0) {
@@ -159,19 +168,25 @@ H264Encoder::H264Encoder(int width, int height, int fps, int crf)
             ") must be even (YUV420P requirement)");
     }
 
-    impl_->init(width, height, fps, crf);
+    impl_->init(width, height, fps, crf, preset);
 }
 
 H264Encoder::~H264Encoder() {
     impl_->cleanup();
 }
 
-std::pair<const uint8_t*, size_t> H264Encoder::encode(
+std::vector<uint8_t> H264Encoder::encode(
     const uint8_t* rgb24, int width, int height)
 {
-    assert(width == width_ && "Width mismatch");
-    assert(height == height_ && "Height mismatch");
-    assert(rgb24 != nullptr && "Null RGB24 pointer");
+    if (width != width_ || height != height_) {
+        throw std::runtime_error(
+            "H264Encoder::encode: dimension mismatch (expected " +
+            std::to_string(width_) + "x" + std::to_string(height_) +
+            ", got " + std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
+    if (rgb24 == nullptr) {
+        throw std::runtime_error("H264Encoder::encode: null RGB24 pointer");
+    }
 
     // Make the frame writable (required before writing to data planes)
     int ret = av_frame_make_writable(impl_->yuv_frame);
@@ -201,10 +216,10 @@ std::pair<const uint8_t*, size_t> H264Encoder::encode(
 
     // Receive all available encoded packets into reusable buffer
     impl_->receive_packets();
-    return {impl_->out_buf.data(), impl_->out_buf.size()};
+    return impl_->out_buf;
 }
 
-std::pair<const uint8_t*, size_t> H264Encoder::flush() {
+std::vector<uint8_t> H264Encoder::flush() {
     // Send null frame to signal end of stream
     int ret = avcodec_send_frame(impl_->ctx, nullptr);
     if (ret < 0 && ret != AVERROR_EOF) {
@@ -215,11 +230,11 @@ std::pair<const uint8_t*, size_t> H264Encoder::flush() {
 
     // Receive all remaining buffered packets into reusable buffer
     impl_->receive_packets();
-    return {impl_->out_buf.data(), impl_->out_buf.size()};
+    return impl_->out_buf;
 }
 
 void H264Encoder::reset() {
     // Close and reinitialize the codec with same parameters
     impl_->cleanup();
-    impl_->init(width_, height_, fps_, crf_);
+    impl_->init(width_, height_, fps_, crf_, preset_);
 }

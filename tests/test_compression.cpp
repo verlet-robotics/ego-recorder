@@ -242,11 +242,11 @@ TEST_F(H264EncoderTest, EncodeProducesOutput) {
     size_t total_bytes = 0;
     // Encode enough frames that the encoder must produce output
     for (int i = 0; i < 60; i++) {
-        auto [data, size] = enc.encode(rgb.data(), W, H);
-        total_bytes += size;
+        auto buf = enc.encode(rgb.data(), W, H);
+        total_bytes += buf.size();
     }
-    auto [fdata, fsize] = enc.flush();
-    total_bytes += fsize;
+    auto flush_buf = enc.flush();
+    total_bytes += flush_buf.size();
 
     EXPECT_GT(total_bytes, 0u);
 }
@@ -256,15 +256,15 @@ TEST_F(H264EncoderTest, FlushDrainsBufferedFrames) {
 
     size_t encode_bytes = 0;
     for (int i = 0; i < 5; i++) {
-        auto [data, size] = enc.encode(rgb.data(), W, H);
-        encode_bytes += size;
+        auto buf = enc.encode(rgb.data(), W, H);
+        encode_bytes += buf.size();
     }
 
-    auto [fdata, fsize] = enc.flush();
+    auto flush_buf = enc.flush();
     // With zerolatency tune, encode() outputs immediately so flush() may
     // return 0.  The important thing is that total output is non-zero and
     // flush does not error.
-    EXPECT_GT(encode_bytes + fsize, 0u);
+    EXPECT_GT(encode_bytes + flush_buf.size(), 0u);
 }
 
 TEST_F(H264EncoderTest, ResetAllowsNewSession) {
@@ -280,11 +280,11 @@ TEST_F(H264EncoderTest, ResetAllowsNewSession) {
     // Second session should work
     size_t total = 0;
     for (int i = 0; i < 30; i++) {
-        auto [data, size] = enc.encode(rgb.data(), W, H);
-        total += size;
+        auto buf = enc.encode(rgb.data(), W, H);
+        total += buf.size();
     }
-    auto [fdata, fsize] = enc.flush();
-    total += fsize;
+    auto flush_buf = enc.flush();
+    total += flush_buf.size();
     EXPECT_GT(total, 0u);
 }
 
@@ -294,11 +294,11 @@ TEST_F(H264EncoderTest, OutputContainsNALUnits) {
     // Encode enough to get output
     std::vector<uint8_t> all_data;
     for (int i = 0; i < 60; i++) {
-        auto [data, size] = enc.encode(rgb.data(), W, H);
-        all_data.insert(all_data.end(), data, data + size);
+        auto buf = enc.encode(rgb.data(), W, H);
+        all_data.insert(all_data.end(), buf.begin(), buf.end());
     }
-    auto [fdata, fsize] = enc.flush();
-    all_data.insert(all_data.end(), fdata, fdata + fsize);
+    auto flush_buf = enc.flush();
+    all_data.insert(all_data.end(), flush_buf.begin(), flush_buf.end());
 
     // H.264 NAL start code: 0x00 0x00 0x00 0x01 or 0x00 0x00 0x01
     bool found_nal = false;
@@ -317,22 +317,22 @@ TEST_F(H264EncoderTest, HigherCRFProducesSmallerOutput) {
     {
         H264Encoder enc(W, H, 30, 18);
         for (int i = 0; i < 30; i++) {
-            auto [d, s] = enc.encode(rgb.data(), W, H);
-            size_crf18 += s;
+            auto buf = enc.encode(rgb.data(), W, H);
+            size_crf18 += buf.size();
         }
-        auto [fd, fs] = enc.flush();
-        size_crf18 += fs;
+        auto flush_buf = enc.flush();
+        size_crf18 += flush_buf.size();
     }
 
     size_t size_crf35 = 0;
     {
         H264Encoder enc(W, H, 30, 35);
         for (int i = 0; i < 30; i++) {
-            auto [d, s] = enc.encode(rgb.data(), W, H);
-            size_crf35 += s;
+            auto buf = enc.encode(rgb.data(), W, H);
+            size_crf35 += buf.size();
         }
-        auto [fd, fs] = enc.flush();
-        size_crf35 += fs;
+        auto flush_buf = enc.flush();
+        size_crf35 += flush_buf.size();
     }
 
     EXPECT_LT(size_crf35, size_crf18);
@@ -343,18 +343,17 @@ TEST_F(H264EncoderTest, RejectsOddDimensions) {
     EXPECT_THROW(H264Encoder(640, 481, 30, 23), std::runtime_error);
 }
 
-TEST_F(H264EncoderTest, EncodeBufferPointerValidUntilNextCall) {
+TEST_F(H264EncoderTest, EncodeReturnsOwnedBuffer) {
     H264Encoder enc(W, H, 30, 23);
 
-    // First encode
-    auto [data1, size1] = enc.encode(rgb.data(), W, H);
-    if (size1 > 0) {
-        uint8_t first_byte = data1[0];  // Must be readable
+    // First encode returns an owned vector
+    auto buf1 = enc.encode(rgb.data(), W, H);
+    if (!buf1.empty()) {
+        uint8_t first_byte = buf1[0];  // Must be readable
 
-        // Second encode invalidates the first pointer, but data1 was valid before this
-        auto [data2, size2] = enc.encode(rgb.data(), W, H);
-        (void)data2;
-        (void)size2;
-        (void)first_byte;
+        // Second encode does NOT invalidate buf1 since it's an owned copy
+        auto buf2 = enc.encode(rgb.data(), W, H);
+        EXPECT_EQ(buf1[0], first_byte);
+        (void)buf2;
     }
 }

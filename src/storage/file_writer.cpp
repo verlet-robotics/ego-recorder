@@ -42,7 +42,7 @@ void FileWriter::write_header(const FileHeader& header) {
         return;
     }
     if (!raw_write(&header, sizeof(header))) {
-        std::fprintf(stderr, "FileWriter: write_header failed (I/O error)\n");
+        throw std::runtime_error("FileWriter: write_header failed (I/O error)");
     }
     header_written_ = true;
 }

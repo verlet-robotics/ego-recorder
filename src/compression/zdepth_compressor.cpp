@@ -38,9 +38,15 @@ ZdepthCompressor::~ZdepthCompressor() = default;
 std::pair<const uint8_t*, size_t> ZdepthCompressor::compress(
     const uint16_t* depth, int width, int height, bool keyframe)
 {
-    assert(width == width_ && "Width mismatch");
-    assert(height == height_ && "Height mismatch");
-    assert(depth != nullptr && "Null depth pointer");
+    if (width != width_ || height != height_) {
+        throw std::runtime_error(
+            "ZdepthCompressor::compress: dimension mismatch (expected " +
+            std::to_string(width_) + "x" + std::to_string(height_) +
+            ", got " + std::to_string(width) + "x" + std::to_string(height) + ")");
+    }
+    if (depth == nullptr) {
+        throw std::runtime_error("ZdepthCompressor::compress: null depth pointer");
+    }
 
     impl_->compressed_buf.clear();
 
@@ -59,8 +65,12 @@ std::pair<const uint8_t*, size_t> ZdepthCompressor::compress(
 std::vector<uint16_t> ZdepthCompressor::decompress(
     const uint8_t* data, size_t size)
 {
-    assert(data != nullptr && "Null data pointer");
-    assert(size > 0 && "Empty compressed data");
+    if (data == nullptr) {
+        throw std::runtime_error("ZdepthCompressor::decompress: null data pointer");
+    }
+    if (size == 0) {
+        throw std::runtime_error("ZdepthCompressor::decompress: empty compressed data");
+    }
 
     // Zdepth Decompress takes a const reference to std::vector<uint8_t>
     std::vector<uint8_t> compressed_vec(data, data + size);

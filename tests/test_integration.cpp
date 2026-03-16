@@ -78,9 +78,9 @@ TEST_F(IntegrationTest, WriteAndReadBackV2Recording) {
         writer.write_header(make_header());
 
         for (int i = 0; i < NUM_FRAMES; i++) {
-            auto [h264_data, h264_size] = h264.encode(
+            auto h264_buf = h264.encode(
                 original_rgb_frames[i].data(), W, H);
-            h264_sizes.push_back(h264_size);
+            h264_sizes.push_back(h264_buf.size());
 
             bool keyframe = (i % 30 == 0);
             auto [zdepth_data, zdepth_size] = zdepth.compress(
@@ -88,14 +88,14 @@ TEST_F(IntegrationTest, WriteAndReadBackV2Recording) {
             zdepth_sizes.push_back(zdepth_size);
 
             writer.write_frame(
-                h264_data, h264_size,
+                h264_buf.data(), h264_buf.size(),
                 zdepth_data, zdepth_size,
                 1000 * (i + 1), i, {});
         }
 
-        auto [flush_data, flush_size] = h264.flush();
-        if (flush_size > 0) {
-            writer.write_trailing_codec_data(flush_data, flush_size);
+        auto flush_buf = h264.flush();
+        if (!flush_buf.empty()) {
+            writer.write_trailing_codec_data(flush_buf.data(), flush_buf.size());
         }
         writer.finalize();
     }
@@ -175,8 +175,8 @@ TEST_F(IntegrationTest, CompressionRatioReasonable) {
     ZdepthCompressor zdepth(W, H);
 
     for (int i = 0; i < NUM_FRAMES; i++) {
-        auto [h264_data, h264_size] = h264.encode(original_rgb_frames[i].data(), W, H);
-        compressed_size += h264_size;
+        auto h264_buf = h264.encode(original_rgb_frames[i].data(), W, H);
+        compressed_size += h264_buf.size();
 
         bool keyframe = (i % 30 == 0);
         auto [zdepth_data, zdepth_size] = zdepth.compress(
@@ -184,8 +184,8 @@ TEST_F(IntegrationTest, CompressionRatioReasonable) {
         compressed_size += zdepth_size;
     }
 
-    auto [fdata, fsize] = h264.flush();
-    compressed_size += fsize;
+    auto flush_buf = h264.flush();
+    compressed_size += flush_buf.size();
 
     double ratio = static_cast<double>(raw_size) / static_cast<double>(compressed_size);
     // Random data compresses less well than real camera data,
@@ -237,17 +237,17 @@ TEST_F(IntegrationTest, MultipleRecordingSessions) {
             writer.write_header(make_header());
 
             for (int i = 0; i < 5; i++) {
-                auto [h264_data, h264_size] = h264.encode(
+                auto h264_buf = h264.encode(
                     original_rgb_frames[i].data(), W, H);
                 std::vector<uint8_t> fake_depth(50, 0x02);
-                writer.write_frame(h264_data, h264_size,
+                writer.write_frame(h264_buf.data(), h264_buf.size(),
                                   fake_depth.data(), fake_depth.size(),
                                   1000 * (i + 1), i, {});
             }
 
-            auto [fdata, fsize] = h264.flush();
-            if (fsize > 0) {
-                writer.write_trailing_codec_data(fdata, fsize);
+            auto flush_buf = h264.flush();
+            if (!flush_buf.empty()) {
+                writer.write_trailing_codec_data(flush_buf.data(), flush_buf.size());
             }
             writer.finalize();
         }

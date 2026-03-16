@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 /// RAII wrapper around FFmpeg libavcodec for real-time H.264 encoding.
@@ -15,7 +16,9 @@ public:
     /// @param height  Frame height in pixels (must be even)
     /// @param fps     Target framerate (default 30)
     /// @param crf     Constant Rate Factor 0-51 (default 23)
-    H264Encoder(int width, int height, int fps = 30, int crf = 23);
+    /// @param preset  x264 speed preset (default "ultrafast")
+    H264Encoder(int width, int height, int fps = 30, int crf = 23,
+                const std::string& preset = "ultrafast");
     ~H264Encoder();
 
     // Non-copyable, non-movable
@@ -24,17 +27,16 @@ public:
     H264Encoder(H264Encoder&&) = delete;
     H264Encoder& operator=(H264Encoder&&) = delete;
 
-    /// Encode one RGB24 frame. Returns {pointer, size} to internal buffer.
-    /// Pointer is valid until the next encode() or flush() call.
-    /// May return size=0 for buffered frames (encoder hasn't produced output yet).
+    /// Encode one RGB24 frame. Returns a copy of the encoded data.
+    /// May return empty vector for buffered frames (encoder hasn't produced output yet).
     /// @param rgb24   Pointer to RGB24 pixel data (width * height * 3 bytes)
     /// @param width   Frame width (must match constructor)
     /// @param height  Frame height (must match constructor)
-    std::pair<const uint8_t*, size_t> encode(const uint8_t* rgb24, int width, int height);
+    std::vector<uint8_t> encode(const uint8_t* rgb24, int width, int height);
 
     /// Flush remaining buffered frames at end of recording.
-    /// Returns {pointer, size} to internal buffer (valid until next encode/flush/reset).
-    std::pair<const uint8_t*, size_t> flush();
+    /// Returns a copy of the flushed data.
+    std::vector<uint8_t> flush();
 
     /// Reset encoder state for a new recording session.
     /// Must be called when starting a new file (after reconnect etc).
@@ -47,4 +49,5 @@ private:
     int height_;
     int fps_;
     int crf_;
+    std::string preset_;
 };

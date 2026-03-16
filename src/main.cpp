@@ -58,6 +58,7 @@
 #endif
 
 #include "presenter/headless_presenter.h"
+#include "presenter/preview_presenter.h"
 #include "utils/audio_alert.h"
 #include "dataset/dataset_manifest.h"
 #include "dataset/dataset_commands.h"
@@ -253,12 +254,323 @@ static FileHeader make_file_header(const RealSensePipeline& camera,
     return header;
 }
 
+// ---- preview subcommand ----------------------------------------------------
+// Unified preview + recording subprocess for the Tauri desktop app.
+// Streams JPEG-encoded RGB + colorized depth to stdout, accepts JSON commands
+// on stdin to start/stop recording. Camera stays open the entire time.
+
+static int run_preview(int argc, char* argv[]) {
+    // Ignore SIGPIPE so broken pipe from parent doesn't kill us instantly
+    signal(SIGPIPE, SIG_IGN);
+
+    // Parse optional flags (same as regular mode, but only a subset matter)
+    Config config = load_config("");
+
+    // Accept optional --width, --height, --warmup, --crf, --queue-size, --config
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        auto next = [&]() -> std::string {
+            return (i + 1 < argc) ? argv[++i] : "";
+        };
+        if (arg == "--config")     { config = load_config(next()); }
+        else if (arg == "--width")  { config.frame_width = std::stoi(next()); }
+        else if (arg == "--height") { config.frame_height = std::stoi(next()); }
+        else if (arg == "--warmup") { config.warmup_frames = std::stoi(next()); }
+        else if (arg == "--crf")    { config.h264_crf = std::stoi(next()); }
+        else if (arg == "--preset") { config.h264_preset = next(); }
+        else if (arg == "--queue-size") { config.queue_size = std::stoi(next()); }
+    }
+
+    const int fw = config.frame_width;
+    const int fh = config.frame_height;
+
+    // Signal handling
+    std::atomic<bool> shutdown_flag{false};
+    setup_signal_handling(shutdown_flag);
+
+    // Camera initialization (poll until available)
+    std::unique_ptr<RealSensePipeline> camera;
+    fprintf(stderr, "[preview] Waiting for RealSense camera...\n");
+    while (!shutdown_flag.load(std::memory_order_acquire)) {
+        try {
+            camera = std::make_unique<RealSensePipeline>();
+            camera->configure_and_start(fw, fh, config.warmup_frames);
+            break;
+        } catch (const rs2::error&) {
+            camera.reset();
+            for (int ms = 0; ms < 2000 && !shutdown_flag.load(); ms += 100) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+    }
+    if (shutdown_flag.load() || !camera) return 0;
+
+    fprintf(stderr, "[preview] Camera: %s (USB %s)\n",
+            camera->serial_number().c_str(), camera->usb_type().c_str());
+
+    // Compression infrastructure
+    ZdepthCompressor zdepth_comp(fw, fh);
+    H264Encoder h264(fw, fh, 30, config.h264_crf, config.h264_preset);
+
+    // Shared recording state
+    std::unique_ptr<FileWriter> writer;
+    std::unique_ptr<BoundedQueue<CapturedFrame>> queue;
+    std::thread writer_thread;
+    Stats stats;
+    std::atomic<bool> recording_active{false};
+    std::atomic<bool> camera_disconnected{false};
+    std::atomic<int64_t> last_capture_ms{0};
+    std::string last_recording_path_;
+    int episode_count = 0;
+
+    // Create preview presenter
+    auto preview = std::make_unique<PreviewPresenter>(
+        config,
+        camera->serial_number(),
+        camera->usb_type(),
+        camera->has_imu(),
+        fw, fh
+    );
+
+    // Start recording lambda (same pattern as main recording flow)
+    auto start_recording = [&](const std::string& sname, const std::string& out_dir,
+                               int crf_override) {
+        // Use provided CRF or fallback to config
+        int crf = (crf_override > 0) ? crf_override : config.h264_crf;
+
+        // Ensure output directory exists (matches headless/GUI mode behavior)
+        {
+            std::error_code ec;
+            std::filesystem::create_directories(out_dir, ec);
+            if (ec) {
+                fprintf(stderr, "[preview] ERROR: cannot create output dir '%s': %s\n",
+                        out_dir.c_str(), ec.message().c_str());
+                return;
+            }
+        }
+
+        const std::string filepath = make_output_path(out_dir, sname, true);
+        last_recording_path_ = filepath;
+        fprintf(stderr, "[preview] Recording to: %s\n", filepath.c_str());
+
+        queue = std::make_unique<BoundedQueue<CapturedFrame>>(
+                    static_cast<size_t>(config.queue_size));
+        writer = std::make_unique<FileWriter>(filepath);
+
+        FileHeader header = make_file_header(*camera, sname, crf);
+        writer->write_header(header);
+
+        last_capture_ms.store(0, std::memory_order_release);
+        recording_active.store(true, std::memory_order_release);
+        stats.recording_started();
+
+        writer_thread = std::thread([&]() {
+            try {
+                while (true) {
+                    auto maybe_frame = queue->pop();
+                    if (!maybe_frame) break;
+
+                    auto& frame = *maybe_frame;
+                    auto h264_buf = h264.encode(frame.rgb_data.data(), fw, fh);
+
+                    bool keyframe = (frame.frame_number % 30 == 0);
+                    auto [zdepth_data, zdepth_size] = zdepth_comp.compress(
+                        reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
+                        fw, fh, keyframe);
+
+                    std::vector<IMUSampleWire> imu_wire;
+                    imu_wire.reserve(frame.imu_samples.size());
+                    for (const auto& imu : frame.imu_samples) {
+                        IMUSampleWire w;
+                        w.timestamp_us = imu.timestamp_us;
+                        w.accel_x = imu.accel[0]; w.accel_y = imu.accel[1]; w.accel_z = imu.accel[2];
+                        w.gyro_x = imu.gyro[0]; w.gyro_y = imu.gyro[1]; w.gyro_z = imu.gyro[2];
+                        imu_wire.push_back(w);
+                    }
+
+                    writer->write_frame(h264_buf.data(), h264_buf.size(), zdepth_data, zdepth_size,
+                                        frame.timestamp_us, frame.frame_number, imu_wire);
+                    stats.frame_written();
+                    stats.bytes_written(h264_buf.size() + zdepth_size);
+                }
+            } catch (const std::exception& e) {
+                fprintf(stderr, "[preview] Writer thread error: %s\n", e.what());
+            }
+        });
+    };
+
+    // Stop recording lambda
+    auto stop_recording = [&]() -> bool {
+        if (!recording_active.exchange(false)) return false;
+        stats.recording_stopped();
+
+        if (queue) queue->close();
+        if (writer_thread.joinable()) writer_thread.join();
+
+        bool has_frames = stats.captured() > 0;
+
+        if (writer && !writer->is_finalized()) {
+            auto flush_buf = h264.flush();
+            if (!flush_buf.empty()) {
+                writer->write_trailing_codec_data(flush_buf.data(), flush_buf.size());
+            }
+            writer->finalize();
+        }
+        writer.reset();
+
+        if (has_frames && !last_recording_path_.empty()) {
+            register_episode(config.output_dir, last_recording_path_);
+        } else if (!has_frames && !last_recording_path_.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(last_recording_path_, ec);
+        }
+        last_recording_path_.clear();
+        h264.reset();
+
+        if (queue) {
+            stats.frames_dropped(queue->dropped());
+            queue.reset();
+        }
+
+        fprintf(stderr, "\n%s\n", stats.summary().c_str());
+        fprintf(stderr, "Recording complete.\n");
+        return has_frames;
+    };
+
+    // Start presenter
+    if (!preview->start()) {
+        fprintf(stderr, "[preview] Failed to start preview presenter\n");
+        camera->stop();
+        return 1;
+    }
+
+    // Capture thread
+    std::thread capture_thread([&]() {
+        while (!shutdown_flag.load(std::memory_order_acquire) && !preview->should_shutdown()) {
+            if (camera_disconnected.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            if (!camera) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
+
+            if (camera->is_device_lost()) {
+                fprintf(stderr, "\n[preview] Camera unplugged\n");
+                camera_disconnected.store(true, std::memory_order_release);
+                preview->on_camera_disconnect();
+                if (recording_active.load(std::memory_order_acquire)) {
+                    stop_recording();
+                }
+                continue;
+            }
+
+            try {
+                auto maybe_frame = camera->poll_frame();
+                if (!maybe_frame) continue;
+
+                CapturedFrame& frame = *maybe_frame;
+                stats.frame_captured();
+                last_capture_ms.store(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count(),
+                    std::memory_order_release);
+
+                // Feed to preview presenter (handles throttling internally)
+                preview->update_frame(
+                    frame.rgb_data.data(),
+                    reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
+                    fw, fh, camera->depth_scale()
+                );
+
+                // Push to writer queue if recording
+                if (recording_active.load(std::memory_order_acquire) && queue) {
+                    queue->push(std::move(frame));
+                }
+            } catch (const rs2::error& e) {
+                fprintf(stderr, "\n[preview] RealSense error: %s\n", e.what());
+                camera_disconnected.store(true, std::memory_order_release);
+                preview->on_camera_disconnect();
+                if (recording_active.load(std::memory_order_acquire)) {
+                    stop_recording();
+                }
+            }
+        }
+    });
+
+    // Main loop: presenter tick + command processing
+    while (!shutdown_flag.load(std::memory_order_acquire) && !preview->should_shutdown()) {
+        // Sync live queue drop count into stats for real-time reporting
+        if (queue) {
+            stats.set_dropped(queue->dropped());
+        }
+
+        preview->update_stats(stats);
+
+        if (!preview->tick()) break;
+
+        // Check for pending record command from stdin
+        RecordCmd rec_cmd;
+        if (preview->consume_record_cmd(rec_cmd)) {
+            if (!recording_active.load()) {
+                try {
+                    start_recording(rec_cmd.session, rec_cmd.output_dir, rec_cmd.crf);
+                } catch (const std::exception& e) {
+                    fprintf(stderr, "[preview] ERROR: failed to start recording: %s\n", e.what());
+                    fprintf(stderr, "Recording complete.\n");
+                }
+            }
+        }
+
+        // Check for pending stop command from stdin
+        if (preview->consume_pending_stop()) {
+            if (recording_active.load()) {
+                bool had_frames = stop_recording();
+                if (had_frames) episode_count++;
+            }
+        }
+
+        // Handle camera disconnect recovery
+        if (camera_disconnected.load(std::memory_order_acquire)) {
+            try {
+                camera = std::make_unique<RealSensePipeline>();
+                camera->configure_and_start(fw, fh, config.warmup_frames);
+                camera_disconnected.store(false, std::memory_order_release);
+                preview->on_camera_reconnect();
+                fprintf(stderr, "[preview] Camera reconnected.\n");
+            } catch (const rs2::error&) {
+                camera.reset();
+                // Retry next tick
+            }
+        }
+    }
+
+    // Shutdown
+    shutdown_flag.store(true, std::memory_order_release);
+
+    if (capture_thread.joinable()) capture_thread.join();
+    stop_recording();
+
+    preview->shutdown();
+
+    if (camera) camera->stop();
+
+    return 0;
+}
+
 // ---- main ------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     // ---- Subcommand dispatch (before cxxopts parsing) ----------------------
     if (argc >= 2) {
         std::string_view cmd = argv[1];
+
+        // ---- preview subcommand (Tauri desktop app integration) ----
+        if (cmd == "preview") {
+            return run_preview(argc, argv);
+        }
 
         // ---- info subcommand (pure C++, no Python dependency) ----
         if (cmd == "info") {
@@ -459,6 +771,8 @@ int main(int argc, char* argv[]) {
          cxxopts::value<int>()->default_value("0"))
         ("crf",            "H.264 CRF quality 0-51 (default 23)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
+        ("preset",         "H.264 encoder speed preset (ultrafast/superfast/veryfast/fast)",
+         cxxopts::value<std::string>()->default_value(""))
         ("queue-size",     "Bounded queue size (2-16)",
          cxxopts::value<int>()->default_value("0"))  // 0 = use config value
         ("warmup",         "Camera warmup frames to skip",
@@ -508,6 +822,10 @@ int main(int argc, char* argv[]) {
     }
     if (args.count("crf") && args["crf"].as<int>() != 0) {
         config.h264_crf = args["crf"].as<int>();
+    }
+    if (args.count("preset")) {
+        auto p = args["preset"].as<std::string>();
+        if (!p.empty()) config.h264_preset = p;
     }
     if (args.count("queue-size") && args["queue-size"].as<int>() != 0) {
         config.queue_size = args["queue-size"].as<int>();
@@ -594,6 +912,7 @@ int main(int argc, char* argv[]) {
     std::atomic<int>               capture_generation{0};
     std::string                    current_session_name = session_name;
     std::string                    last_recording_path_;
+    int                            episode_count = 0;
 
     // Zombie storage: old capture threads/cameras that are stuck inside
     // librealsense's 15-second internal timeout. Kept alive until shutdown.
@@ -643,7 +962,7 @@ int main(int argc, char* argv[]) {
 
         // ---- Compression infrastructure ------------------------------------
         ZdepthCompressor zdepth_comp(fw, fh);
-        H264Encoder h264(fw, fh, 30, config.h264_crf);
+        H264Encoder h264(fw, fh, 30, config.h264_crf, config.h264_preset);
 
         // ---- Helper lambdas ------------------------------------------------
 
@@ -674,44 +993,48 @@ int main(int argc, char* argv[]) {
 
             // Start writer thread
             writer_thread = std::thread([&]() {
-                while (true) {
-                    auto maybe_frame = queue->pop();
-                    if (!maybe_frame) break;
+                try {
+                    while (true) {
+                        auto maybe_frame = queue->pop();
+                        if (!maybe_frame) break;
 
-                    auto& frame = *maybe_frame;
+                        auto& frame = *maybe_frame;
 
-                    // H.264 encode RGB (returns pointer to internal buffer)
-                    auto [h264_data, h264_size] = h264.encode(frame.rgb_data.data(), fw, fh);
+                        // H.264 encode RGB (returns owned buffer)
+                        auto h264_buf = h264.encode(frame.rgb_data.data(), fw, fh);
 
-                    // Zdepth compress depth -- keyframe every 30 frames (GOP=30)
-                    bool keyframe = (frame.frame_number % 30 == 0);
-                    auto [zdepth_data, zdepth_size] = zdepth_comp.compress(
-                        reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
-                        fw, fh, keyframe);
+                        // Zdepth compress depth -- keyframe every 30 frames (GOP=30)
+                        bool keyframe = (frame.frame_number % 30 == 0);
+                        auto [zdepth_data, zdepth_size] = zdepth_comp.compress(
+                            reinterpret_cast<const uint16_t*>(frame.depth_data.data()),
+                            fw, fh, keyframe);
 
-                    std::vector<IMUSampleWire> imu_wire;
-                    imu_wire.reserve(frame.imu_samples.size());
-                    for (const auto& imu : frame.imu_samples) {
-                        IMUSampleWire w;
-                        w.timestamp_us = imu.timestamp_us;
-                        w.accel_x = imu.accel[0];
-                        w.accel_y = imu.accel[1];
-                        w.accel_z = imu.accel[2];
-                        w.gyro_x  = imu.gyro[0];
-                        w.gyro_y  = imu.gyro[1];
-                        w.gyro_z  = imu.gyro[2];
-                        imu_wire.push_back(w);
+                        std::vector<IMUSampleWire> imu_wire;
+                        imu_wire.reserve(frame.imu_samples.size());
+                        for (const auto& imu : frame.imu_samples) {
+                            IMUSampleWire w;
+                            w.timestamp_us = imu.timestamp_us;
+                            w.accel_x = imu.accel[0];
+                            w.accel_y = imu.accel[1];
+                            w.accel_z = imu.accel[2];
+                            w.gyro_x  = imu.gyro[0];
+                            w.gyro_y  = imu.gyro[1];
+                            w.gyro_z  = imu.gyro[2];
+                            imu_wire.push_back(w);
+                        }
+
+                        writer->write_frame(
+                            h264_buf.data(), h264_buf.size(),
+                            zdepth_data, zdepth_size,
+                            frame.timestamp_us,
+                            frame.frame_number,
+                            imu_wire);
+
+                        stats.frame_written();
+                        stats.bytes_written(h264_buf.size() + zdepth_size);
                     }
-
-                    writer->write_frame(
-                        h264_data, h264_size,
-                        zdepth_data, zdepth_size,
-                        frame.timestamp_us,
-                        frame.frame_number,
-                        imu_wire);
-
-                    stats.frame_written();
-                    stats.bytes_written(h264_size + zdepth_size);
+                } catch (const std::exception& e) {
+                    fprintf(stderr, "[writer] Thread error: %s\n", e.what());
                 }
             });
         };
@@ -739,12 +1062,12 @@ int main(int argc, char* argv[]) {
             // Flush H.264 encoder AFTER writer thread exits (no more encode() calls)
             // but BEFORE finalize() (file still open for writing)
             if (writer && !writer->is_finalized()) {
-                auto [flush_data, flush_size] = h264.flush();
-                if (flush_size > 0) {
+                auto flush_buf = h264.flush();
+                if (!flush_buf.empty()) {
                     // Write trailing H.264 NAL units without creating an IndexEntry.
                     // The reader recovers these by reading bytes between the last
                     // indexed frame block's end and footer.index_offset.
-                    writer->write_trailing_codec_data(flush_data, flush_size);
+                    writer->write_trailing_codec_data(flush_buf.data(), flush_buf.size());
                 }
                 writer->finalize();
             }
@@ -792,7 +1115,12 @@ int main(int argc, char* argv[]) {
             };
 
             auto on_stop_recording = [&]() {
-                stop_recording();
+                bool had_frames = stop_recording();
+                if (had_frames) {
+                    episode_count++;
+                    static_cast<GuiPresenter*>(presenter.get())
+                        ->set_episode_count(episode_count);
+                }
             };
 
             auto on_session_name_changed = [&](const std::string& new_name) {
@@ -1034,6 +1362,12 @@ int main(int argc, char* argv[]) {
 
         // ---- Main loop: presenter tick + stats reporting -------------------
         while (!shutdown_flag.load(std::memory_order_acquire)) {
+            // Sync live queue drop count into stats so the presenter sees
+            // real-time drops, not just the post-recording total.
+            if (queue) {
+                stats.set_dropped(queue->dropped());
+            }
+
             // Push latest stats to presenter
             presenter->update_stats(stats);
 
