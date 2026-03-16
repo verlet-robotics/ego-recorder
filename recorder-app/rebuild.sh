@@ -85,17 +85,23 @@ if [[ "$BUILD_CPP" == true ]]; then
 
     cmake --build "$BUILD_DIR" --parallel "$NPROC"
 
-    # Install to /usr/local/bin if the installed binary is outdated
-    INSTALLED="/usr/local/bin/ego-recorder"
+    # Install to /usr/local/bin and ~/.local/bin if the installed binary is outdated
     BUILT="${BUILD_DIR}/ego-recorder"
     if [[ -f "$BUILT" ]]; then
-        if [[ ! -f "$INSTALLED" ]] || [[ "$BUILT" -nt "$INSTALLED" ]]; then
-            info "Installing ego-recorder to ${INSTALLED}..."
-            sudo cp "$BUILT" "$INSTALLED"
-            ok "Installed ego-recorder"
-        else
-            ok "ego-recorder binary up to date"
-        fi
+        for dest in "/usr/local/bin/ego-recorder" "${HOME}/.local/bin/ego-recorder"; do
+            if [[ ! -f "$dest" ]] || [[ "$BUILT" -nt "$dest" ]]; then
+                info "Installing ego-recorder to ${dest}..."
+                if [[ "$dest" == /usr/local/* ]]; then
+                    sudo cp "$BUILT" "$dest"
+                else
+                    mkdir -p "$(dirname "$dest")"
+                    cp "$BUILT" "$dest"
+                fi
+                ok "Installed ego-recorder to ${dest}"
+            else
+                ok "ego-recorder at ${dest} up to date"
+            fi
+        done
     fi
 
     if [[ "$RUN_TESTS" == true ]]; then
