@@ -322,12 +322,16 @@ build_cpp() {
 
     info "Building C++ ego-recorder..."
 
+    local project_dir
+    project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
     local cmake_args=(
         -B "$build_dir" -S ..
         -DCMAKE_BUILD_TYPE=Release
         -DWITH_GUI=OFF
         -DWITH_PYTHON=OFF
         -DWITH_SYSTEMD=OFF
+        -DFETCHCONTENT_BASE_DIR="${project_dir}/.deps"
     )
 
     # Auto-detect ROS 2 Jazzy realsense2
