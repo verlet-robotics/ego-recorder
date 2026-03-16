@@ -9,7 +9,8 @@
 # This script is idempotent — safe to run multiple times.
 
 set -euo pipefail
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -342,6 +343,7 @@ build_cpp() {
 # ── Step 4: Install frontend dependencies ─────────────────────────────────────
 
 install_frontend() {
+    cd "$SCRIPT_DIR"
     info "Installing frontend dependencies..."
     bun install
     ok "Frontend dependencies installed"
@@ -350,6 +352,7 @@ install_frontend() {
 # ── Step 5: Build Tauri app ───────────────────────────────────────────────────
 
 build_tauri() {
+    cd "$SCRIPT_DIR"
     info "Building Tauri app..."
     bun run tauri build
 
