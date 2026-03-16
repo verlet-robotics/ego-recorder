@@ -68,8 +68,8 @@ SECONDS=0
 # ---------------------------------------------------------------------------
 if [[ "$BUILD_CPP" == true ]]; then
     if [[ "$CLEAN" == true ]] && [[ -d "$BUILD_DIR" ]]; then
-        info "Cleaning C++ build directory..."
-        rm -rf "$BUILD_DIR"
+        info "Cleaning C++ build artifacts (keeping CMake cache)..."
+        cmake --build "$BUILD_DIR" --target clean 2>/dev/null || rm -rf "$BUILD_DIR"
     fi
 
     info "Building C++ ego-recorder..."
@@ -110,8 +110,8 @@ fi
 # ---------------------------------------------------------------------------
 if [[ "$BUILD_APP" == true ]]; then
     if [[ "$CLEAN" == true ]]; then
-        info "Cleaning Tauri build artifacts..."
-        rm -rf "${APP_DIR}/src-tauri/target"
+        info "Cleaning Tauri build artifacts (keeping cached deps)..."
+        (cd "${APP_DIR}/src-tauri" && cargo clean --package ego-recorder-app 2>/dev/null || true)
     fi
 
     info "Building recorder app..."
