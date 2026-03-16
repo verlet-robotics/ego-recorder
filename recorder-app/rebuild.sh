@@ -11,6 +11,7 @@
 #   ./rebuild.sh --app      # Only Tauri app
 #   ./rebuild.sh --release  # Build Tauri in release mode
 #   ./rebuild.sh --test     # Run tests after building
+#   ./rebuild.sh --hard-reset  # Nuke C++ build cache, keep deps
 
 set -euo pipefail
 
@@ -37,6 +38,7 @@ BUILD_APP=true
 RELEASE=false
 RUN_TESTS=false
 CLEAN=false
+HARD_RESET=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --release) RELEASE=true; shift ;;
         --test)    RUN_TESTS=true; shift ;;
         --clean)   CLEAN=true; shift ;;
+        --hard-reset) HARD_RESET=true; shift ;;
         --help|-h)
             echo "Usage: ./rebuild.sh [OPTIONS]"
             echo ""
@@ -53,7 +56,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --app       Only rebuild Tauri recorder app"
             echo "  --release   Build Tauri app in release mode"
             echo "  --test      Run tests after building"
-            echo "  --clean     Delete build directories before rebuilding"
+            echo "  --clean      Delete build directories before rebuilding"
+            echo "  --hard-reset Nuke C++ build cache but keep downloaded deps"
             echo ""
             echo "With no flags, rebuilds both C++ and Tauri app (debug mode)."
             exit 0 ;;
@@ -61,7 +65,43 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+DEPS_DIR="${PROJECT_DIR}/.deps"
+
 SECONDS=0
+
+# ---------------------------------------------------------------------------
+# 0. Hard reset: nuke C++ build cache, preserve downloaded deps
+# ---------------------------------------------------------------------------
+if [[ "$HARD_RESET" == true ]]; then
+    # Rescue deps from build/_deps/ → .deps/ if they're inside the build dir
+    if [[ -d "${BUILD_DIR}/_deps" ]]; then
+        info "Rescuing FetchContent deps from build/_deps/ → .deps/ ..."
+        mkdir -p "$DEPS_DIR"
+        for src_dir in "${BUILD_DIR}/_deps/"*-src; do
+            [[ -d "$src_dir" ]] || continue
+            dep_name="$(basename "$src_dir")"
+            if [[ -d "${DEPS_DIR}/${dep_name}" ]]; then
+                info "  ${dep_name} already in .deps/, skipping"
+            else
+                mv "$src_dir" "${DEPS_DIR}/${dep_name}"
+                info "  moved ${dep_name}"
+            fi
+        done
+        for sub_dir in "${BUILD_DIR}/_deps/"*-subbuild; do
+            [[ -d "$sub_dir" ]] || continue
+            dep_name="$(basename "$sub_dir")"
+            [[ -d "${DEPS_DIR}/${dep_name}" ]] || mv "$sub_dir" "${DEPS_DIR}/${dep_name}"
+        done
+    fi
+
+    if [[ -d "$BUILD_DIR" ]]; then
+        info "Removing build directory: ${BUILD_DIR}"
+        rm -rf "$BUILD_DIR"
+        ok "C++ build cache cleared (deps preserved in .deps/)"
+    else
+        info "No build directory to clear"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # 1. C++ ego-recorder
