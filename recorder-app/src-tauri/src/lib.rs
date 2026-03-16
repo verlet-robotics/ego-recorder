@@ -69,6 +69,7 @@ pub fn run() {
             commands::preview_commands::get_preview_state,
             commands::preview_commands::get_camera_info,
             commands::preview_commands::get_preview_url,
+            commands::preview_commands::discard_last_recording,
             // Recorder (legacy commands still needed for status/stats/lid-safe)
             commands::recorder_commands::get_recorder_status,
             commands::recorder_commands::get_recorder_stats,

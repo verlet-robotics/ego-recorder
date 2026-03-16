@@ -30,6 +30,7 @@ import {
   LockOpen,
   FolderOpen,
   Database,
+  Trash2,
 } from "lucide-react";
 
 function generateSessionName(): string {
@@ -145,7 +146,8 @@ export function RecordPage() {
       onRecorderStopped((reason) => {
         recordingInFlight.current = false;
         if (reason !== "clean") setError(`Recording stopped: ${reason}`);
-        // Refresh dataset list so episode count updates
+        // Mark last episode as discardable and refresh dataset list
+        setLastDiscardable(true);
         commands.listDatasets().then(setAvailableDatasets).catch(() => {});
       }),
       onPreviewStateChanged((state) => {
@@ -241,6 +243,7 @@ export function RecordPage() {
 
     try {
       await commands.startRecording(`${outputDir}/${selectedDataset}`, sessionName, crf);
+      setLastDiscardable(false);
       setStatus({ ...useRecorderStore.getState().status, state: "recording", framesWritten: 0, framesDropped: 0, captureFps: 0, writeFps: 0, fileSizeMb: 0, elapsedSeconds: 0 });
       setPreviewState("recording");
       setSessionName(generateSessionName());
@@ -259,6 +262,8 @@ export function RecordPage() {
       recordingInFlight.current = false;
     }
   }, []);
+
+  const [lastDiscardable, setLastDiscardable] = useState(false);
 
   const handleToggleLidSafe = useCallback(async () => {
     try {
@@ -279,11 +284,24 @@ export function RecordPage() {
   const isStopping = status.state === "stopping";
   const isCountingDown = countdown !== null;
   const canStart = !isRecording && !isStopping && !isCountingDown && previewState === "previewing" && !!selectedDataset;
+
+  const handleDiscardLast = useCallback(async () => {
+    if (isRecording || isStopping) return;
+    try {
+      const path = await commands.discardLastRecording();
+      setLastDiscardable(false);
+      setError(null);
+      commands.listDatasets().then(setAvailableDatasets).catch(() => {});
+      console.log("Discarded:", path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [isRecording, isStopping, setAvailableDatasets]);
   const selectedDatasetInfo = selectedDataset
     ? availableDatasets.find((d) => d.dirName === selectedDataset) ?? null
     : null;
 
-  // Keyboard shortcut: Space to start/stop
+  // Keyboard shortcuts: Space to start/stop, Escape to discard last
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -292,10 +310,14 @@ export function RecordPage() {
         if (isRecording) handleStopRecording();
         else if (canStart) handleStartRecording();
       }
+      if (e.code === "Escape" && lastDiscardable && !isRecording && !isStopping) {
+        e.preventDefault();
+        handleDiscardLast();
+      }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [isRecording, canStart, handleStartRecording, handleStopRecording]);
+  }, [isRecording, isStopping, canStart, lastDiscardable, handleStartRecording, handleStopRecording, handleDiscardLast]);
 
   return (
     <div className="flex flex-col h-full p-6 gap-4 relative">
@@ -487,31 +509,56 @@ export function RecordPage() {
         </div>
       </div>
 
-      {/* Record button */}
-      <div className="flex items-center justify-center py-4">
-        {isRecording || isStopping ? (
-          <Button
-            size="lg"
-            variant="destructive"
-            className="h-14 px-10 text-base gap-3"
-            onClick={handleStopRecording}
-            disabled={isStopping}
-          >
-            <Square className="size-5" />
-            {isStopping ? "Stopping..." : "Stop Recording"}
-          </Button>
-        ) : (
-          <Button
-            size="lg"
-            variant="highlight"
-            className="h-14 px-10 text-base gap-3"
-            onClick={handleStartRecording}
-            disabled={!canStart}
-          >
-            <Circle className="size-5 fill-current" />
-            Start Recording
-          </Button>
-        )}
+      {/* Record button + discard */}
+      <div className="flex flex-col items-center justify-center py-4 gap-2">
+        <div className="flex items-center gap-3">
+          {isRecording || isStopping ? (
+            <Button
+              size="lg"
+              variant="destructive"
+              className="h-14 px-10 text-base gap-3 animate-pulse"
+              onClick={handleStopRecording}
+              disabled={isStopping}
+            >
+              <Square className="size-5" />
+              {isStopping ? "Stopping..." : "Stop Recording"}
+            </Button>
+          ) : (
+            <>
+              <Button
+                size="lg"
+                variant="highlight"
+                className="h-14 px-10 text-base gap-3"
+                onClick={handleStartRecording}
+                disabled={!canStart}
+              >
+                <Circle className="size-5 fill-current" />
+                Start Recording
+              </Button>
+              {lastDiscardable && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="h-14 px-4 text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+                  onClick={handleDiscardLast}
+                  title="Discard last episode (Esc)"
+                >
+                  <Trash2 className="size-5" />
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <kbd className="text-[10px] text-muted-foreground bg-muted px-2.5 py-1 rounded-full font-mono">
+            space to {isRecording ? "stop" : "record"}
+          </kbd>
+          {lastDiscardable && !isRecording && (
+            <kbd className="text-[10px] text-muted-foreground bg-muted px-2.5 py-1 rounded-full font-mono">
+              esc to discard
+            </kbd>
+          )}
+        </div>
       </div>
 
       {/* Error display */}
@@ -532,10 +579,7 @@ export function RecordPage() {
         />
       )}
 
-      {/* Keyboard hint */}
-      <div className="text-center text-[10px] text-muted-foreground mt-auto">
-        Press <kbd className="font-mono bg-muted px-1.5 py-0.5 rounded text-[9px]">Space</kbd> to {isRecording ? "stop" : "start"} recording
-      </div>
+      <div className="mt-auto" />
     </div>
   );
 }

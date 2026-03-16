@@ -172,6 +172,15 @@ pub async fn start_preview(
                 continue;
             }
 
+            // Capture recording file path from subprocess
+            if line.contains("Recording to:") {
+                if let Some(path) = line.split("Recording to:").nth(1) {
+                    let path = path.trim().to_string();
+                    log::info!("Recording path: {}", path);
+                    *state_for_stderr.last_recording_path.write() = Some(path);
+                }
+            }
+
             // Parse stats lines
             if let Some(status) = parse_stats_line(&line) {
                 *state_for_stderr.recorder_status.write() = status.clone();
@@ -709,6 +718,11 @@ async fn auto_retry_preview(
                     let _ = app_s.emit("preview:state-changed", "previewing");
                     continue;
                 }
+                if line.contains("Recording to:") {
+                    if let Some(path) = line.split("Recording to:").nth(1) {
+                        *state_s.last_recording_path.write() = Some(path.trim().to_string());
+                    }
+                }
                 if let Some(status) = parse_stats_line(&line) {
                     *state_s.recorder_status.write() = status.clone();
                     let _ = app_s.emit("recorder:stats", status);
@@ -821,4 +835,36 @@ async fn auto_retry_preview(
     );
     *state.preview_state.write() = PreviewState::Error;
     let _ = app.emit("preview:state-changed", "error");
+}
+
+/// Discard the last recorded episode by deleting the .egorec file.
+#[tauri::command]
+pub async fn discard_last_recording(
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    // Don't allow discard while recording
+    {
+        let ps = *state.preview_state.read();
+        if ps == PreviewState::Recording {
+            return Err("Cannot discard while recording".to_string());
+        }
+    }
+
+    let path = state
+        .last_recording_path
+        .write()
+        .take()
+        .ok_or("No recording to discard")?;
+
+    let file_path = std::path::PathBuf::from(&path);
+    if !file_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    tokio::fs::remove_file(&file_path)
+        .await
+        .map_err(|e| format!("Failed to delete {}: {}", path, e))?;
+
+    log::info!("Discarded recording: {}", path);
+    Ok(path)
 }

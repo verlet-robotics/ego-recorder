@@ -23,6 +23,7 @@ export const commands = {
   startRecording: (outputDir: string, sessionName: string, crf: number) =>
     invoke<void>("start_recording", { outputDir, sessionName, crf }),
   stopRecording: () => invoke<void>("stop_recording"),
+  discardLastRecording: () => invoke<string>("discard_last_recording"),
   getPreviewState: () => invoke<PreviewState>("get_preview_state"),
   getCameraInfo: () => invoke<CameraInfo | null>("get_camera_info"),
   getPreviewUrl: (streamType: string) => invoke<string>("get_preview_url", { streamType }),

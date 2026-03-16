@@ -190,6 +190,9 @@ pub struct AppState {
     // File watcher state
     pub watcher_cmd_tx: tokio::sync::Mutex<Option<mpsc::Sender<WatcherCommand>>>,
     pub watched_dir: RwLock<Option<String>>,
+
+    // Last recording path (for discard feature)
+    pub last_recording_path: RwLock<Option<String>>,
 }
 
 impl Drop for AppState {
@@ -245,6 +248,8 @@ impl AppState {
 
             watcher_cmd_tx: tokio::sync::Mutex::new(None),
             watched_dir: RwLock::new(None),
+
+            last_recording_path: RwLock::new(None),
         }
     }
 }

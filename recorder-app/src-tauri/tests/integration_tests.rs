@@ -687,7 +687,7 @@ mod dataset_manifest_tests {
     #[test]
     fn create_dataset_creates_dir_and_manifest() {
         let dir = TempDir::new().unwrap();
-        let manifest = create_dataset(dir.path(), "My Cool Dataset").unwrap();
+        let manifest = create_dataset(dir.path(), "My Cool Dataset", None).unwrap();
 
         assert_eq!(manifest.name, "My Cool Dataset");
         assert_eq!(manifest.version, 1);
@@ -702,7 +702,7 @@ mod dataset_manifest_tests {
     #[test]
     fn create_dataset_sanitizes_directory_name() {
         let dir = TempDir::new().unwrap();
-        let _manifest = create_dataset(dir.path(), "Hello World! (test)").unwrap();
+        let _manifest = create_dataset(dir.path(), "Hello World! (test)", None).unwrap();
 
         // Spaces and special chars should be replaced with hyphens.
         // Just verify a directory was created.
@@ -717,9 +717,9 @@ mod dataset_manifest_tests {
     #[test]
     fn create_dataset_rejects_duplicate_name() {
         let dir = TempDir::new().unwrap();
-        create_dataset(dir.path(), "test").unwrap();
+        create_dataset(dir.path(), "test", None).unwrap();
 
-        let result = create_dataset(dir.path(), "test");
+        let result = create_dataset(dir.path(), "test", None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already exists"));
     }
@@ -735,7 +735,7 @@ mod dataset_manifest_tests {
         let dir = TempDir::new().unwrap();
         fs::create_dir_all(dir.path()).unwrap();
 
-        let mut manifest = DatasetManifest::new("Test Dataset");
+        let mut manifest = DatasetManifest::new("Test Dataset", None);
         manifest.description = "A test description".to_string();
         manifest.tags = vec!["tag1".to_string(), "tag2".to_string()];
 
@@ -1568,7 +1568,7 @@ mod edge_case_tests {
         // Create multiple datasets quickly
         for i in 0..10 {
             let name = format!("dataset-{}", i);
-            create_dataset(dir.path(), &name).unwrap();
+            create_dataset(dir.path(), &name, None).unwrap();
         }
 
         // All should exist
