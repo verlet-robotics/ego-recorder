@@ -196,6 +196,9 @@ pub struct AppState {
 
     // Camera hotplug detection
     pub camera_connected: AtomicBool,
+
+    // Recent subprocess stderr lines (for error diagnostics)
+    pub preview_stderr: RwLock<Vec<String>>,
 }
 
 impl Drop for AppState {
@@ -255,6 +258,8 @@ impl AppState {
             last_recording_path: RwLock::new(None),
 
             camera_connected: AtomicBool::new(false),
+
+            preview_stderr: RwLock::new(Vec::new()),
         }
     }
 }

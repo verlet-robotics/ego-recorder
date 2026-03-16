@@ -51,6 +51,9 @@ pub async fn start_preview(
 
     *state.preview_state.write() = PreviewState::Starting;
 
+    // Clear stderr buffer from previous attempts
+    state.preview_stderr.write().clear();
+
     let binary_path = {
         let config = state.config.read();
         config
@@ -204,8 +207,15 @@ pub async fn start_preview(
                 continue;
             }
 
-            // Log any unrecognized stderr so crash messages aren't swallowed
+            // Log and buffer unrecognized stderr for error diagnostics
             log::info!("ego-recorder: {}", line);
+            {
+                let mut buf = state_for_stderr.preview_stderr.write();
+                buf.push(line);
+                if buf.len() > 50 {
+                    buf.remove(0);
+                }
+            }
         }
 
         // Stderr closed = process exited
@@ -369,10 +379,17 @@ pub async fn start_preview(
         Ok(Ok(info)) => info,
         Ok(Err(_)) => {
             // Channel dropped -- subprocess died
-            // Kill subprocess to be safe
             kill_preview_process(pid);
             *state.preview_state.write() = PreviewState::Error;
-            return Err("Preview subprocess failed to send camera info".to_string());
+            // Wait briefly for stderr reader to collect output
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let stderr_lines = state.preview_stderr.read().join("\n");
+            let detail = if stderr_lines.is_empty() {
+                format!("ego-recorder crashed immediately. Binary: {}", binary_path)
+            } else {
+                format!("ego-recorder failed:\n{}", stderr_lines)
+            };
+            return Err(detail);
         }
         Err(_) => {
             // Timeout -- subprocess hung (e.g. no camera plugged in)
@@ -388,7 +405,15 @@ pub async fn start_preview(
 
     if camera_info.serial.is_empty() {
         *state.preview_state.write() = PreviewState::Error;
-        return Err("Preview subprocess failed to initialize camera".into());
+        // Wait briefly for stderr reader to collect output
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let stderr_lines = state.preview_stderr.read().join("\n");
+        let detail = if stderr_lines.is_empty() {
+            format!("ego-recorder exited without camera info. Binary: {}", binary_path)
+        } else {
+            format!("ego-recorder failed to initialize:\n{}", stderr_lines)
+        };
+        return Err(detail);
     }
 
     *state.camera_info.write() = Some(camera_info.clone());
