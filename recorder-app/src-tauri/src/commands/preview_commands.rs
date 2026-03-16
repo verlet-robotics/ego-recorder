@@ -185,6 +185,7 @@ pub async fn start_preview(
             if let Some(status) = parse_stats_line(&line) {
                 *state_for_stderr.recorder_status.write() = status.clone();
                 let _ = app_for_stderr.emit("recorder:stats", status);
+                continue;
             }
 
             if line.contains("Recording complete") {
@@ -200,7 +201,11 @@ pub async fn start_preview(
                 let _ = app_for_stderr.emit("recorder:stats", s.clone());
                 // Notify frontend so it can reset recordingInFlight
                 let _ = app_for_stderr.emit("recorder:stopped", "clean");
+                continue;
             }
+
+            // Log any unrecognized stderr so crash messages aren't swallowed
+            log::info!("ego-recorder: {}", line);
         }
 
         // Stderr closed = process exited
@@ -732,6 +737,7 @@ async fn auto_retry_preview(
                 if let Some(status) = parse_stats_line(&line) {
                     *state_s.recorder_status.write() = status.clone();
                     let _ = app_s.emit("recorder:stats", status);
+                    continue;
                 }
                 if line.contains("Recording complete") {
                     let ps = *state_s.preview_state.read();
@@ -743,7 +749,9 @@ async fn auto_retry_preview(
                     s.state = RecorderState::Idle;
                     let _ = app_s.emit("recorder:stats", s.clone());
                     let _ = app_s.emit("recorder:stopped", "clean");
+                    continue;
                 }
+                log::info!("ego-recorder: {}", line);
             }
             // Process exited — just update state, no further retry
             if state_s.preview_generation.load(Ordering::SeqCst) == gen_s {
