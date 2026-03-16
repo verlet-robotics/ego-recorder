@@ -88,6 +88,10 @@ install_system_deps() {
 
         # Audio — aplay used by ego-recorder for countdown/recording beeps
         alsa-utils
+
+        # DDS libs required by librealsense2 CMake targets
+        libfastcdr-dev
+        libfastrtps-dev
     )
 
     sudo apt-get update -qq
