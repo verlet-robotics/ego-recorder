@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# rebuild-app.sh -- Rebuild and install the recorder app after code changes.
+# rebuild.sh -- Rebuild and install the recorder app after code changes.
 #
 # Rebuilds whichever components have changed:
 #   1. C++ ego-recorder binary (if src/ changed)
 #   2. Rust/Tauri backend + React frontend (recorder-app)
 #
 # Usage:
-#   ./scripts/rebuild-app.sh            # Rebuild everything that changed
-#   ./scripts/rebuild-app.sh --cpp      # Only C++ recorder
-#   ./scripts/rebuild-app.sh --app      # Only Tauri app
-#   ./scripts/rebuild-app.sh --release  # Build Tauri in release mode
-#   ./scripts/rebuild-app.sh --test     # Run tests after building
+#   ./rebuild.sh            # Rebuild everything that changed
+#   ./rebuild.sh --cpp      # Only C++ recorder
+#   ./rebuild.sh --app      # Only Tauri app
+#   ./rebuild.sh --release  # Build Tauri in release mode
+#   ./rebuild.sh --test     # Run tests after building
 
 set -euo pipefail
 
@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
         --release) RELEASE=true; shift ;;
         --test)    RUN_TESTS=true; shift ;;
         --help|-h)
-            echo "Usage: ./scripts/rebuild-app.sh [OPTIONS]"
+            echo "Usage: ./rebuild.sh [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --cpp       Only rebuild C++ ego-recorder binary"
@@ -175,7 +175,7 @@ if [[ "$BUILD_APP" == true ]]; then
         echo -e "  Tauri app:  ${APP_DIR}/src-tauri/target/debug/ego-recorder-app"
         echo -e ""
         echo -e "  ${DIM}For dev mode with hot-reload:  cd recorder-app && bun run tauri dev${NC}"
-        echo -e "  ${DIM}For release build:             ./scripts/rebuild-app.sh --release${NC}"
+        echo -e "  ${DIM}For release build:             ./rebuild.sh --release${NC}"
     fi
 fi
 echo ""
