@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,8 +26,6 @@ export function CameraPreview() {
   const [retrying, setRetrying] = useState(false);
   const [streamError, setStreamError] = useState(false);
   const [usbWarning, setUsbWarning] = useState<string | null>(null);
-  const [stale, setStale] = useState(false);
-  const lastFrameTime = useRef<number>(Date.now());
 
   const isRecording = status.state === "recording";
 
@@ -44,19 +42,6 @@ export function CameraPreview() {
     }
   }, [previewState]);
 
-  // Stale frame detection: if no img onLoad fires for >5s, show indicator
-  useEffect(() => {
-    if (previewState !== "previewing" && previewState !== "recording") {
-      setStale(false);
-      return;
-    }
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - lastFrameTime.current;
-      setStale(elapsed > 5000);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [previewState]);
-
   // Detect stream loss via img onerror (works with MJPEG unlike onLoad)
   const handleImgError = useCallback(() => {
     setStreamError(true);
@@ -64,8 +49,6 @@ export function CameraPreview() {
 
   const handleImgLoad = useCallback(() => {
     setStreamError(false);
-    setStale(false);
-    lastFrameTime.current = Date.now();
   }, []);
 
   const handleRetry = async () => {
@@ -191,14 +174,6 @@ export function CameraPreview() {
         <div className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-amber-900/80 text-amber-200 px-3 py-1.5 rounded text-xs backdrop-blur-sm z-10">
           <AlertTriangle className="size-3 shrink-0" />
           {usbWarning}
-        </div>
-      )}
-
-      {/* Stream stale indicator */}
-      {stale && !streamError && (
-        <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-yellow-900/80 text-yellow-200 px-2 py-1 rounded text-xs backdrop-blur-sm">
-          <Loader2 className="size-3 animate-spin" />
-          Stream stalled
         </div>
       )}
 
