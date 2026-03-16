@@ -36,6 +36,7 @@ BUILD_CPP=true
 BUILD_APP=true
 RELEASE=false
 RUN_TESTS=false
+CLEAN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
         --app)     BUILD_CPP=false; BUILD_APP=true; shift ;;
         --release) RELEASE=true; shift ;;
         --test)    RUN_TESTS=true; shift ;;
+        --clean)   CLEAN=true; shift ;;
         --help|-h)
             echo "Usage: ./rebuild.sh [OPTIONS]"
             echo ""
@@ -51,6 +53,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --app       Only rebuild Tauri recorder app"
             echo "  --release   Build Tauri app in release mode"
             echo "  --test      Run tests after building"
+            echo "  --clean     Delete build directories before rebuilding"
             echo ""
             echo "With no flags, rebuilds both C++ and Tauri app (debug mode)."
             exit 0 ;;
@@ -64,6 +67,11 @@ SECONDS=0
 # 1. C++ ego-recorder
 # ---------------------------------------------------------------------------
 if [[ "$BUILD_CPP" == true ]]; then
+    if [[ "$CLEAN" == true ]] && [[ -d "$BUILD_DIR" ]]; then
+        info "Cleaning C++ build directory..."
+        rm -rf "$BUILD_DIR"
+    fi
+
     info "Building C++ ego-recorder..."
 
     if [[ ! -d "$BUILD_DIR" ]]; then
@@ -102,6 +110,11 @@ fi
 # 2. Tauri recorder app (Rust backend + React frontend)
 # ---------------------------------------------------------------------------
 if [[ "$BUILD_APP" == true ]]; then
+    if [[ "$CLEAN" == true ]]; then
+        info "Cleaning Tauri build artifacts..."
+        rm -rf "${APP_DIR}/src-tauri/target"
+    fi
+
     info "Building recorder app..."
 
     # Ensure Bun is in PATH
