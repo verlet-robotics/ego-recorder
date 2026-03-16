@@ -569,6 +569,12 @@ pub fn get_preview_url(
     Ok(format!("http://localhost:{}/preview/{}", port, stream_type))
 }
 
+/// Check if a RealSense camera is currently connected (live sysfs scan).
+#[tauri::command]
+pub fn check_camera() -> bool {
+    !crate::camera_watcher::detect_realsense_cameras().is_empty()
+}
+
 /// Kill a preview subprocess by PID (SIGKILL).
 fn kill_preview_process(pid: u32) {
     use nix::sys::signal::{kill, Signal};

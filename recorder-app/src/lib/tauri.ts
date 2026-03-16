@@ -27,6 +27,7 @@ export const commands = {
   getPreviewState: () => invoke<PreviewState>("get_preview_state"),
   getCameraInfo: () => invoke<CameraInfo | null>("get_camera_info"),
   getPreviewUrl: (streamType: string) => invoke<string>("get_preview_url", { streamType }),
+  checkCamera: () => invoke<boolean>("check_camera"),
 
   // Recorder (status/stats/lid-safe)
   getRecorderStatus: () => invoke<string>("get_recorder_status"),
@@ -115,4 +116,8 @@ export function onFileAdded(callback: (item: EgorecListItem) => void): Promise<U
 
 export function onFileRemoved(callback: (name: string) => void): Promise<UnlistenFn> {
   return listen<string>("library:file-removed", (event) => callback(event.payload));
+}
+
+export function onCameraConnected(callback: (connected: boolean) => void): Promise<UnlistenFn> {
+  return listen<boolean>("camera:connected", (event) => callback(event.payload));
 }

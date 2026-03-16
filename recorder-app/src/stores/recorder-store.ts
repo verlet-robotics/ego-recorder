@@ -19,6 +19,9 @@ interface RecorderState {
   conversionStatus: Record<string, ConversionStatus>;
   videoServerPort: number | null;
 
+  // Camera hotplug detection
+  cameraConnected: boolean;
+
   // Dataset selection for recording
   selectedDataset: string | null;
   availableDatasets: DatasetSummary[];
@@ -38,6 +41,8 @@ interface RecorderState {
 
   addOrUpdateFile: (file: EgorecListItem) => void;
   removeFile: (name: string) => void;
+
+  setCameraConnected: (connected: boolean) => void;
 
   setSelectedDataset: (dirName: string | null) => void;
   setAvailableDatasets: (datasets: DatasetSummary[]) => void;
@@ -70,6 +75,8 @@ export const useRecorderStore = create<RecorderState>((set) => ({
   currentFile: null,
   conversionStatus: {},
   videoServerPort: null,
+
+  cameraConnected: false,
 
   selectedDataset: null,
   availableDatasets: [],
@@ -114,6 +121,8 @@ export const useRecorderStore = create<RecorderState>((set) => ({
         currentFile: state.currentFile === name ? null : state.currentFile,
       };
     }),
+
+  setCameraConnected: (connected) => set({ cameraConnected: connected }),
 
   setSelectedDataset: (dirName) => set({ selectedDataset: dirName }),
   setAvailableDatasets: (datasets) => set({ availableDatasets: datasets }),

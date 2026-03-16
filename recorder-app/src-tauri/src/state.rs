@@ -193,6 +193,9 @@ pub struct AppState {
 
     // Last recording path (for discard feature)
     pub last_recording_path: RwLock<Option<String>>,
+
+    // Camera hotplug detection
+    pub camera_connected: AtomicBool,
 }
 
 impl Drop for AppState {
@@ -250,6 +253,8 @@ impl AppState {
             watched_dir: RwLock::new(None),
 
             last_recording_path: RwLock::new(None),
+
+            camera_connected: AtomicBool::new(false),
         }
     }
 }

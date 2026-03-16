@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRecorderStore } from "@/stores/recorder-store";
 import { cn } from "@/lib/utils";
-import { RefreshCw, AlertTriangle, Loader2 } from "lucide-react";
+import { RefreshCw, AlertTriangle, Loader2, Usb } from "lucide-react";
 import { commands } from "@/lib/tauri";
 import { onUsbWarning } from "@/lib/tauri";
 
@@ -16,6 +16,7 @@ function formatElapsed(seconds: number): string {
 
 export function CameraPreview() {
   const previewState = useRecorderStore((s) => s.previewState);
+  const cameraConnected = useRecorderStore((s) => s.cameraConnected);
   const cameraInfo = useRecorderStore((s) => s.cameraInfo);
   const rgbUrl = useRecorderStore((s) => s.previewRgbUrl);
   const depthUrl = useRecorderStore((s) => s.previewDepthUrl);
@@ -86,6 +87,19 @@ export function CameraPreview() {
       setRetrying(false);
     }
   };
+
+  // No camera connected and not actively previewing/recording
+  if (!cameraConnected && (previewState === "off" || previewState === "error")) {
+    return (
+      <div className="flex items-center justify-center h-[280px] rounded-lg border-2 border-dashed border-muted-foreground/25 bg-muted/5">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <Usb className="size-8 text-muted-foreground/50" />
+          <p className="text-sm font-medium text-muted-foreground">Connect a RealSense camera to start</p>
+          <p className="text-xs text-muted-foreground/60">Preview will begin automatically</p>
+        </div>
+      </div>
+    );
+  }
 
   // Off or starting: skeleton loader
   if (previewState === "off" || previewState === "starting") {

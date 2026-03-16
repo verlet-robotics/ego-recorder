@@ -16,6 +16,7 @@ import {
   onRecorderStopped,
   onPreviewStateChanged,
   onPreviewDisconnected,
+  onCameraConnected,
 } from "@/lib/tauri";
 import { playCountdown, playConfirmTone } from "@/lib/audio";
 import { cn } from "@/lib/utils";
@@ -55,6 +56,7 @@ export function RecordPage() {
   const setPreviewUrls = useRecorderStore((s) => s.setPreviewUrls);
   const setCameraInfo = useRecorderStore((s) => s.setCameraInfo);
   const previewState = useRecorderStore((s) => s.previewState);
+  const setCameraConnected = useRecorderStore((s) => s.setCameraConnected);
 
   const selectedDataset = useRecorderStore((s) => s.selectedDataset);
   const setSelectedDataset = useRecorderStore((s) => s.setSelectedDataset);
@@ -79,6 +81,15 @@ export function RecordPage() {
 
     async function initPreview() {
       try {
+        // Check if a camera is physically connected before attempting preview
+        const hasCam = await commands.checkCamera();
+        if (!mounted) return;
+        setCameraConnected(hasCam);
+        if (!hasCam) {
+          setPreviewState("off");
+          return;
+        }
+
         // Check if preview is already running (Fix 10)
         const currentState = await commands.getPreviewState();
         if (!mounted) return;
@@ -157,11 +168,33 @@ export function RecordPage() {
         setPreviewState("off");
         setPreviewUrls(null, null);
       }),
+      onCameraConnected((connected) => {
+        setCameraConnected(connected);
+        if (connected) {
+          // Auto-start preview when camera is plugged in and preview isn't active
+          const currentPreview = useRecorderStore.getState().previewState;
+          if (currentPreview === "off" || currentPreview === "error") {
+            setPreviewState("starting");
+            commands.startPreview().then((info) => {
+              setCameraInfo(info);
+              return Promise.all([
+                commands.getPreviewUrl("rgb"),
+                commands.getPreviewUrl("depth"),
+              ]).then(([rgb, depth]) => {
+                setPreviewUrls(rgb, depth);
+                setPreviewState("previewing");
+              });
+            }).catch(() => {
+              setPreviewState("error");
+            });
+          }
+        }
+      }),
     ];
     return () => {
       subscriptions.forEach((p) => p.then((unsub) => unsub()));
     };
-  }, [setStatus, setPreviewState, setPreviewUrls]);
+  }, [setStatus, setPreviewState, setPreviewUrls, setCameraConnected, setCameraInfo]);
 
   // Periodic disk info polling
   useEffect(() => {

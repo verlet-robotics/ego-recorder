@@ -1,3 +1,4 @@
+pub mod camera_watcher;
 pub mod commands;
 pub mod config;
 mod disk;
@@ -45,6 +46,11 @@ pub fn run() {
             let app_handle_upload = app.handle().clone();
             upload::upload_loop::spawn_upload_loop(app_handle_upload, state_for_upload);
 
+            // Spawn camera hotplug watcher
+            let state_for_camera = Arc::clone(&app_state);
+            let app_handle_camera = app.handle().clone();
+            camera_watcher::spawn_camera_watcher(app_handle_camera, state_for_camera);
+
             // Spawn file watcher for auto-discovering new recordings
             let state_for_watcher = Arc::clone(&app_state);
             let app_handle_watcher = app.handle().clone();
@@ -70,6 +76,7 @@ pub fn run() {
             commands::preview_commands::get_camera_info,
             commands::preview_commands::get_preview_url,
             commands::preview_commands::discard_last_recording,
+            commands::preview_commands::check_camera,
             // Recorder (legacy commands still needed for status/stats/lid-safe)
             commands::recorder_commands::get_recorder_status,
             commands::recorder_commands::get_recorder_stats,
