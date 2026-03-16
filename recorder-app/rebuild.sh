@@ -79,8 +79,6 @@ if [[ "$BUILD_CPP" == true ]]; then
         cmake -B "$BUILD_DIR" \
             -DWITH_GUI=ON \
             -DWITH_PYTHON=ON \
-            --log-level=WARNING \
-            -DFETCHCONTENT_QUIET=ON \
             "$PROJECT_DIR"
     fi
 
