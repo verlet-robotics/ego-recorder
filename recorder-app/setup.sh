@@ -331,6 +331,7 @@ build_cpp() {
         -DWITH_GUI=OFF
         -DWITH_PYTHON=OFF
         -DWITH_SYSTEMD=OFF
+        -DBUILD_TESTS=OFF
         -DFETCHCONTENT_BASE_DIR="${project_dir}/.deps"
     )
 
