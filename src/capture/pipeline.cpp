@@ -1,5 +1,6 @@
 #include "capture/pipeline.h"
 
+#include <chrono>
 #include <cstdio>
 #include <optional>
 #include <stdexcept>
@@ -57,10 +58,9 @@ void RealSensePipeline::configure_and_start(int width, int height, int warmup_fr
         });
 
     if (!usb_type_.empty() && usb_type_[0] == '2') {
+        // Structured sentinel parsed by recorder-app stderr reader
         fprintf(stderr,
-            "WARNING: USB 2.0 detected. Bandwidth may be insufficient for "
-            "%dx%d@30fps RGB+depth. Use a USB 3.0 port and cable.\n",
-            width, height);
+            "USB_WARNING: Camera on USB 2.0 port. Use USB 3.0 for reliable operation.\n");
     }
 
     // -------------------------------------------------------------------------
@@ -98,10 +98,28 @@ void RealSensePipeline::configure_and_start(int width, int height, int warmup_fr
 
     // -------------------------------------------------------------------------
     // 8. Warmup -- drop first N frames for auto-exposure stabilization
+    //    Uses per-frame timeout (2s) and total deadline (10s) to avoid hanging
+    //    if the camera is slow to start producing frames.
     // -------------------------------------------------------------------------
     fprintf(stderr, "Warming up camera (%d frames)...\n", warmup_frames);
-    for (int i = 0; i < warmup_frames; ++i) {
-        pipe_.wait_for_frames();
+    {
+        auto warmup_start = std::chrono::steady_clock::now();
+        constexpr auto warmup_deadline = std::chrono::seconds(10);
+        constexpr unsigned int per_frame_timeout_ms = 2000;
+
+        for (int i = 0; i < warmup_frames; ++i) {
+            auto elapsed = std::chrono::steady_clock::now() - warmup_start;
+            if (elapsed >= warmup_deadline) {
+                fprintf(stderr, "Warmup deadline reached after %d/%d frames\n",
+                        i, warmup_frames);
+                break;
+            }
+
+            rs2::frameset fs;
+            if (!pipe_.try_wait_for_frames(&fs, per_frame_timeout_ms)) {
+                fprintf(stderr, "Warmup frame %d/%d timed out\n", i + 1, warmup_frames);
+            }
+        }
     }
     fprintf(stderr, "Camera ready.\n");
 

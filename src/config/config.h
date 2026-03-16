@@ -26,7 +26,7 @@ struct Config {
 
     // [recording]
     int      queue_size    = 8;    ///< Bounded capture queue depth (2-16)
-    int      warmup_frames = 30;   ///< Camera warmup frames to skip before recording
+    int      warmup_frames = 15;   ///< Camera warmup frames to skip before recording
     uint64_t disk_min_mb   = 500;  ///< Stop recording when free disk drops below this (MB)
 
     // [service]

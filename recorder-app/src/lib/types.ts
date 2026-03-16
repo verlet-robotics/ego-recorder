@@ -127,7 +127,7 @@ export interface CameraInfo {
 }
 
 /** Preview subprocess state */
-export type PreviewState = "off" | "starting" | "previewing" | "recording" | "stopping" | "error";
+export type PreviewState = "off" | "starting" | "previewing" | "recording" | "stopping" | "error" | "retrying";
 
 export type Page = "record" | "library" | "datasets" | "upload" | "settings";
 

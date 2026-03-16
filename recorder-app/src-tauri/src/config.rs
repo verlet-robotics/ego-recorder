@@ -68,7 +68,7 @@ impl Default for RecorderConfig {
         Self {
             binary_path: locate_binary(),
             default_crf: 23,
-            warmup_frames: 30,
+            warmup_frames: 15,
             h264_preset: "ultrafast".to_string(),
             keep_display_on: true,
         }

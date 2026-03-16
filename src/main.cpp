@@ -406,7 +406,32 @@ static int run_preview(int argc, char* argv[]) {
         stats.recording_stopped();
 
         if (queue) queue->close();
-        if (writer_thread.joinable()) writer_thread.join();
+
+        // Join writer thread with a 5-second deadline to prevent stop_recording
+        // from hanging if the writer is stuck on I/O.
+        // Move writer_thread into the join_waiter so detaching doesn't create
+        // dangling references back into the stop_recording lambda's stack.
+        if (writer_thread.joinable()) {
+            auto done = std::make_shared<std::atomic<bool>>(false);
+            std::thread join_waiter([done, t = std::move(writer_thread)]() mutable {
+                t.join();
+                done->store(true, std::memory_order_release);
+            });
+
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!done->load(std::memory_order_acquire)
+                   && std::chrono::steady_clock::now() < deadline)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+
+            if (done->load(std::memory_order_acquire)) {
+                join_waiter.join();
+            } else {
+                fprintf(stderr, "[preview] Writer thread did not finish within 5s, detaching\n");
+                join_waiter.detach();
+            }
+        }
 
         bool has_frames = stats.captured() > 0;
 

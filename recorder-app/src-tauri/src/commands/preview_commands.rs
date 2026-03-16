@@ -11,6 +11,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
+/// Maximum number of automatic restart attempts when the subprocess crashes
+/// during preview (not recording).
+const MAX_AUTO_RETRIES: u32 = 3;
+/// Delay between auto-retry attempts.
+const RETRY_DELAY: Duration = Duration::from_secs(2);
+/// If no RGB frame arrives within this duration, the watchdog kills the subprocess.
+const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Spawn the `ego-recorder preview` subprocess and start streaming frames.
 /// Returns camera info once the subprocess is ready.
 #[tauri::command]
@@ -24,7 +32,7 @@ pub async fn start_preview(
     // Check not already running
     {
         let ps = *state.preview_state.read();
-        if ps != PreviewState::Off && ps != PreviewState::Error {
+        if ps != PreviewState::Off && ps != PreviewState::Error && ps != PreviewState::Retrying {
             return Err("Preview already running".into());
         }
     }
@@ -106,10 +114,19 @@ pub async fn start_preview(
             .load(Ordering::SeqCst)
             == reader_gen
         {
-            *state_for_reader.preview_state.write() = PreviewState::Off;
+            // Set Error instead of Off so the stderr task's auto-retry logic
+            // or the frontend can decide what to do.
+            let current = *state_for_reader.preview_state.read();
+            if current != PreviewState::Off && current != PreviewState::Error && current != PreviewState::Retrying {
+                *state_for_reader.preview_state.write() = PreviewState::Error;
+                let _ = app_for_reader.emit("preview:state-changed", "error");
+            }
             *state_for_reader.preview_pid.write() = None;
             *state_for_reader.preview_stdin.lock().await = None;
-            let _ = app_for_reader.emit("preview:disconnected", ());
+            // Note: NOT emitting preview:disconnected here. The state-changed
+            // event already conveys the Error state. The old preview:disconnected
+            // handler in record-page sets state to "off", which would overwrite
+            // the Error state and prevent the retry UI from showing.
         }
     });
 
@@ -132,6 +149,14 @@ pub async fn start_preview(
 
             let line = line.trim().to_string();
             if line.is_empty() {
+                continue;
+            }
+
+            // Check for USB 2.0 warning sentinel
+            if line.starts_with("USB_WARNING:") {
+                let msg = line.trim_start_matches("USB_WARNING:").trim().to_string();
+                log::warn!("Preview: {}", msg);
+                let _ = app_for_stderr.emit("preview:usb-warning", msg);
                 continue;
             }
 
@@ -180,23 +205,139 @@ pub async fn start_preview(
         }
 
         let exit_status = child.wait().await;
-        let mut s = state_for_stderr.recorder_status.write();
-        s.state = RecorderState::Idle;
-        *state_for_stderr.preview_pid.write() = None;
-        *state_for_stderr.preview_state.write() = PreviewState::Off;
 
-        match exit_status {
-            Ok(status) if status.success() => {
+        // Determine exit info while holding locks briefly, then drop before await
+        enum ExitAction {
+            Clean,
+            CrashRetry(i32),
+            CrashError(i32),
+            Error(String),
+        }
+
+        let action = {
+            state_for_stderr.recorder_status.write().state = RecorderState::Idle;
+            *state_for_stderr.preview_pid.write() = None;
+
+            match exit_status {
+                Ok(status) if status.success() => ExitAction::Clean,
+                Ok(status) => {
+                    let code = status.code().unwrap_or(-1);
+                    state_for_stderr.recorder_status.write().state = RecorderState::Error;
+
+                    let was_recording = {
+                        let ps = *state_for_stderr.preview_state.read();
+                        ps == PreviewState::Recording || ps == PreviewState::Stopping
+                    };
+
+                    if !was_recording {
+                        ExitAction::CrashRetry(code)
+                    } else {
+                        ExitAction::CrashError(code)
+                    }
+                }
+                Err(e) => {
+                    state_for_stderr.recorder_status.write().state = RecorderState::Error;
+                    ExitAction::Error(e.to_string())
+                }
+            }
+        };
+
+        match action {
+            ExitAction::Clean => {
+                *state_for_stderr.preview_state.write() = PreviewState::Off;
                 let _ = app_for_stderr.emit("recorder:stopped", "clean");
             }
-            Ok(status) => {
-                let code = status.code().unwrap_or(-1);
-                s.state = RecorderState::Error;
-                let _ = app_for_stderr.emit("recorder:stopped", format!("exit code {}", code));
+            ExitAction::CrashRetry(code) => {
+                // Auto-retry on non-zero exit when NOT recording.
+                auto_retry_preview(
+                    &state_for_stderr,
+                    &app_for_stderr,
+                    stderr_gen,
+                    code,
+                )
+                .await;
             }
-            Err(e) => {
-                s.state = RecorderState::Error;
-                let _ = app_for_stderr.emit("recorder:stopped", format!("error: {}", e));
+            ExitAction::CrashError(code) => {
+                *state_for_stderr.preview_state.write() = PreviewState::Error;
+                let _ = app_for_stderr.emit("preview:state-changed", "error");
+                let _ = app_for_stderr
+                    .emit("recorder:stopped", format!("exit code {}", code));
+            }
+            ExitAction::Error(msg) => {
+                *state_for_stderr.preview_state.write() = PreviewState::Error;
+                let _ = app_for_stderr.emit("preview:state-changed", "error");
+                let _ = app_for_stderr.emit("recorder:stopped", format!("error: {}", msg));
+            }
+        }
+    });
+
+    // Spawn watchdog task: kills the subprocess if no RGB frame arrives for
+    // WATCHDOG_TIMEOUT. This is defense-in-depth alongside the frame reader
+    // timeout — catches cases where the subprocess is alive but stuck.
+    let state_for_watchdog = Arc::clone(&state);
+    let app_for_watchdog = app_handle.clone();
+    let watchdog_gen = generation;
+    let mut watchdog_rx = state.rgb_frame_tx.subscribe();
+    let watchdog_handle = tokio::spawn(async move {
+        // Wait for the first frame before starting the timeout loop.
+        // During startup (camera warmup, camera info handshake) no frames are
+        // expected, so we must not fire the watchdog prematurely.
+        loop {
+            if state_for_watchdog
+                .preview_generation
+                .load(Ordering::SeqCst)
+                != watchdog_gen
+            {
+                return;
+            }
+            match watchdog_rx.changed().await {
+                Ok(()) => break,  // First frame arrived, start watchdog loop
+                Err(_) => return, // Channel closed before first frame
+            }
+        }
+
+        // Now that frames are flowing, enforce the timeout
+        loop {
+            if state_for_watchdog
+                .preview_generation
+                .load(Ordering::SeqCst)
+                != watchdog_gen
+            {
+                break;
+            }
+
+            match tokio::time::timeout(WATCHDOG_TIMEOUT, watchdog_rx.changed()).await {
+                Ok(Ok(())) => {
+                    // Frame arrived, keep watching
+                    continue;
+                }
+                Ok(Err(_)) => {
+                    // Channel closed (frame reader exited), stop watching
+                    break;
+                }
+                Err(_) => {
+                    // Timeout — no frame for WATCHDOG_TIMEOUT
+                    if state_for_watchdog
+                        .preview_generation
+                        .load(Ordering::SeqCst)
+                        != watchdog_gen
+                    {
+                        break;
+                    }
+
+                    log::error!(
+                        "Preview watchdog: no frame for {}s, killing subprocess",
+                        WATCHDOG_TIMEOUT.as_secs()
+                    );
+
+                    if let Some(pid) = *state_for_watchdog.preview_pid.read() {
+                        kill_preview_process(pid);
+                    }
+
+                    *state_for_watchdog.preview_state.write() = PreviewState::Error;
+                    let _ = app_for_watchdog.emit("preview:state-changed", "error");
+                    break;
+                }
             }
         }
     });
@@ -206,6 +347,7 @@ pub async fn start_preview(
         let mut tasks = state.preview_tasks.lock().await;
         tasks.push(reader_handle);
         tasks.push(stderr_handle);
+        tasks.push(watchdog_handle);
     }
 
     // Wait for camera info with timeout (Fix 5)
@@ -249,19 +391,16 @@ pub async fn stop_preview(state: State<'_, Arc<AppState>>) -> Result<(), String>
     // Serialize lifecycle operations (Fix 6)
     let _lifecycle_guard = state.preview_lock.lock().await;
 
-    let pid = state
-        .preview_pid
-        .read()
-        .ok_or("No preview process running")?;
-
-    // Bump generation to invalidate background tasks (Fix 7)
+    // Bump generation FIRST to invalidate background tasks and cancel any
+    // in-progress auto-retry, even if preview_pid is None (between retry attempts).
     state.preview_generation.fetch_add(1, Ordering::SeqCst);
 
-    // Send SIGINT for graceful shutdown
-    use nix::sys::signal::{kill, Signal};
-    use nix::unistd::Pid;
-    kill(Pid::from_raw(pid as i32), Signal::SIGINT)
-        .map_err(|e| format!("Failed to send SIGINT to preview: {}", e))?;
+    // Send SIGINT if a subprocess is running
+    if let Some(pid) = *state.preview_pid.read() {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+        let _ = kill(Pid::from_raw(pid as i32), Signal::SIGINT);
+    }
 
     *state.preview_state.write() = PreviewState::Off;
 
@@ -426,4 +565,260 @@ fn kill_preview_process(pid: u32) {
     use nix::sys::signal::{kill, Signal};
     use nix::unistd::Pid;
     let _ = kill(Pid::from_raw(pid as i32), Signal::SIGKILL);
+}
+
+/// Attempt to restart the preview subprocess up to MAX_AUTO_RETRIES times.
+/// Called from the stderr reader task when the subprocess exits with a non-zero
+/// code and we were NOT recording.
+async fn auto_retry_preview(
+    state: &Arc<AppState>,
+    app: &tauri::AppHandle,
+    generation: u64,
+    exit_code: i32,
+) {
+    for attempt in 1..=MAX_AUTO_RETRIES {
+        // Bail if generation changed (user started a new lifecycle)
+        if state.preview_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+
+        log::warn!(
+            "Preview subprocess exited with code {}. Auto-retry {}/{}",
+            exit_code,
+            attempt,
+            MAX_AUTO_RETRIES
+        );
+
+        *state.preview_state.write() = PreviewState::Retrying;
+        let _ = app.emit("preview:state-changed", "retrying");
+
+        tokio::time::sleep(RETRY_DELAY).await;
+
+        // Check generation again after sleep
+        if state.preview_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+
+        let binary_path = {
+            let config = state.config.read();
+            match config.recorder.binary_path.clone() {
+                Some(p) => p,
+                None => {
+                    *state.preview_state.write() = PreviewState::Error;
+                    let _ = app.emit("preview:state-changed", "error");
+                    return;
+                }
+            }
+        };
+
+        let warmup = state.config.read().recorder.warmup_frames;
+        let preset = state.config.read().recorder.h264_preset.clone();
+
+        let child_result = Command::new(&binary_path)
+            .arg("preview")
+            .arg("--warmup")
+            .arg(warmup.to_string())
+            .arg("--preset")
+            .arg(&preset)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let mut child = match child_result {
+            Ok(c) => c,
+            Err(e) => {
+                log::error!("Auto-retry {}: failed to spawn: {}", attempt, e);
+                continue;
+            }
+        };
+
+        let pid = match child.id() {
+            Some(p) => p,
+            None => {
+                log::error!("Auto-retry {}: no PID", attempt);
+                continue;
+            }
+        };
+
+        *state.preview_pid.write() = Some(pid);
+
+        let stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => continue,
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => continue,
+        };
+        let stderr = match child.stderr.take() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        *state.preview_stdin.lock().await = Some(stdin);
+
+        let (info_tx, info_rx) = oneshot::channel();
+        let rgb_tx = state.rgb_frame_tx.clone();
+        let depth_tx = state.depth_frame_tx.clone();
+
+        // Spawn new frame reader
+        let state_r = Arc::clone(state);
+        let app_r = app.clone();
+        let gen = generation;
+        let reader_handle = tokio::spawn(async move {
+            frame_reader::read_frames(stdout, info_tx, rgb_tx, depth_tx).await;
+            if state_r.preview_generation.load(Ordering::SeqCst) == gen {
+                let current = *state_r.preview_state.read();
+                if current != PreviewState::Off && current != PreviewState::Error && current != PreviewState::Retrying {
+                    *state_r.preview_state.write() = PreviewState::Error;
+                    let _ = app_r.emit("preview:state-changed", "error");
+                }
+                *state_r.preview_pid.write() = None;
+                *state_r.preview_stdin.lock().await = None;
+            }
+        });
+
+        // Spawn new stderr reader (non-recursive: won't auto-retry again)
+        let state_s = Arc::clone(state);
+        let app_s = app.clone();
+        let gen_s = generation;
+        let stderr_handle = tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if state_s.preview_generation.load(Ordering::SeqCst) != gen_s {
+                    break;
+                }
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                if line.starts_with("USB_WARNING:") {
+                    let msg = line.trim_start_matches("USB_WARNING:").trim().to_string();
+                    let _ = app_s.emit("preview:usb-warning", msg);
+                    continue;
+                }
+                if line == "DISCONNECTED" {
+                    *state_s.preview_state.write() = PreviewState::Error;
+                    let _ = app_s.emit("preview:state-changed", "error");
+                    continue;
+                }
+                if line == "RECONNECTED" {
+                    *state_s.preview_state.write() = PreviewState::Previewing;
+                    let _ = app_s.emit("preview:state-changed", "previewing");
+                    continue;
+                }
+                if let Some(status) = parse_stats_line(&line) {
+                    *state_s.recorder_status.write() = status.clone();
+                    let _ = app_s.emit("recorder:stats", status);
+                }
+                if line.contains("Recording complete") {
+                    let ps = *state_s.preview_state.read();
+                    if ps == PreviewState::Recording || ps == PreviewState::Stopping {
+                        *state_s.preview_state.write() = PreviewState::Previewing;
+                        let _ = app_s.emit("preview:state-changed", "previewing");
+                    }
+                    let mut s = state_s.recorder_status.write();
+                    s.state = RecorderState::Idle;
+                    let _ = app_s.emit("recorder:stats", s.clone());
+                    let _ = app_s.emit("recorder:stopped", "clean");
+                }
+            }
+            // Process exited — just update state, no further retry
+            if state_s.preview_generation.load(Ordering::SeqCst) == gen_s {
+                let exit_status = child.wait().await;
+                *state_s.preview_pid.write() = None;
+                match exit_status {
+                    Ok(s) if s.success() => {
+                        *state_s.preview_state.write() = PreviewState::Off;
+                    }
+                    _ => {
+                        // Don't overwrite Retrying — auto_retry_preview may be
+                        // between attempts and will set the right state itself.
+                        let current = *state_s.preview_state.read();
+                        if current != PreviewState::Retrying {
+                            *state_s.preview_state.write() = PreviewState::Error;
+                            let _ = app_s.emit("preview:state-changed", "error");
+                        }
+                    }
+                }
+            }
+        });
+
+        // Spawn new watchdog (wait for first frame before starting timeout)
+        let state_w = Arc::clone(state);
+        let app_w = app.clone();
+        let gen_w = generation;
+        let mut watchdog_rx = state.rgb_frame_tx.subscribe();
+        let watchdog_handle = tokio::spawn(async move {
+            // Wait for first frame (no timeout during startup)
+            loop {
+                if state_w.preview_generation.load(Ordering::SeqCst) != gen_w {
+                    return;
+                }
+                match watchdog_rx.changed().await {
+                    Ok(()) => break,
+                    Err(_) => return,
+                }
+            }
+            // Enforce timeout after first frame
+            loop {
+                if state_w.preview_generation.load(Ordering::SeqCst) != gen_w {
+                    break;
+                }
+                match tokio::time::timeout(WATCHDOG_TIMEOUT, watchdog_rx.changed()).await {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(_)) => break,
+                    Err(_) => {
+                        if state_w.preview_generation.load(Ordering::SeqCst) != gen_w {
+                            break;
+                        }
+                        log::error!("Preview watchdog (retry): no frame, killing subprocess");
+                        if let Some(pid) = *state_w.preview_pid.read() {
+                            kill_preview_process(pid);
+                        }
+                        *state_w.preview_state.write() = PreviewState::Error;
+                        let _ = app_w.emit("preview:state-changed", "error");
+                        break;
+                    }
+                }
+            }
+        });
+
+        {
+            let mut tasks = state.preview_tasks.lock().await;
+            tasks.push(reader_handle);
+            tasks.push(stderr_handle);
+            tasks.push(watchdog_handle);
+        }
+
+        // Wait for camera info
+        match tokio::time::timeout(Duration::from_secs(15), info_rx).await {
+            Ok(Ok(info)) if !info.serial.is_empty() => {
+                *state.camera_info.write() = Some(info.clone());
+                *state.preview_state.write() = PreviewState::Previewing;
+                let _ = app.emit("preview:camera-info", &info);
+                let _ = app.emit("preview:state-changed", "previewing");
+                log::info!("Auto-retry {}: preview restarted successfully", attempt);
+                return;
+            }
+            _ => {
+                // Kill this failed attempt, try again
+                kill_preview_process(pid);
+                *state.preview_pid.write() = None;
+                *state.preview_stdin.lock().await = None;
+                continue;
+            }
+        }
+    }
+
+    // All retries exhausted
+    log::error!(
+        "Preview auto-retry: all {} attempts failed (last exit code {})",
+        MAX_AUTO_RETRIES,
+        exit_code
+    );
+    *state.preview_state.write() = PreviewState::Error;
+    let _ = app.emit("preview:state-changed", "error");
 }

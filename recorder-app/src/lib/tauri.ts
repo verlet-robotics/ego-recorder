@@ -96,6 +96,10 @@ export function onCameraInfo(callback: (info: CameraInfo) => void): Promise<Unli
   return listen<CameraInfo>("preview:camera-info", (event) => callback(event.payload));
 }
 
+export function onUsbWarning(callback: (message: string) => void): Promise<UnlistenFn> {
+  return listen<string>("preview:usb-warning", (event) => callback(event.payload));
+}
+
 export function onUploadProgress(callback: (progress: UploadProgressEvent) => void): Promise<UnlistenFn> {
   return listen<UploadProgressEvent>("upload:progress", (event) => callback(event.payload));
 }

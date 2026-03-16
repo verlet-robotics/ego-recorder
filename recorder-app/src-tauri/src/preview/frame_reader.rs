@@ -1,9 +1,15 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::ChildStdout;
 use tokio::sync::{oneshot, watch};
 
 use super::CameraInfo;
+
+/// Per-read timeout: if a single read_exact doesn't complete within this
+/// duration the frame reader exits, which causes the subprocess to be
+/// cleaned up and the preview state to transition to Off/Error.
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Read frames from the ego-recorder preview subprocess stdout.
 ///
@@ -79,18 +85,28 @@ pub async fn read_frames(
 }
 
 /// Read a single frame: type_byte + u32_le(size) + <size bytes>.
-/// Returns None on EOF.
+/// Returns None on EOF or if any individual read exceeds READ_TIMEOUT.
 async fn read_frame(reader: &mut BufReader<ChildStdout>) -> Option<(u8, Vec<u8>)> {
     // Read type byte
     let mut type_byte = [0u8; 1];
-    if reader.read_exact(&mut type_byte).await.is_err() {
-        return None;
+    match tokio::time::timeout(READ_TIMEOUT, reader.read_exact(&mut type_byte)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => return None, // EOF or I/O error
+        Err(_) => {
+            log::warn!("Preview: read_exact timed out waiting for frame tag byte");
+            return None;
+        }
     }
 
     // Read u32 size (little-endian)
     let mut size_buf = [0u8; 4];
-    if reader.read_exact(&mut size_buf).await.is_err() {
-        return None;
+    match tokio::time::timeout(READ_TIMEOUT, reader.read_exact(&mut size_buf)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => return None,
+        Err(_) => {
+            log::warn!("Preview: read_exact timed out waiting for frame size");
+            return None;
+        }
     }
     let size = u32::from_le_bytes(size_buf) as usize;
 
@@ -102,8 +118,13 @@ async fn read_frame(reader: &mut BufReader<ChildStdout>) -> Option<(u8, Vec<u8>)
 
     // Read frame data
     let mut data = vec![0u8; size];
-    if reader.read_exact(&mut data).await.is_err() {
-        return None;
+    match tokio::time::timeout(READ_TIMEOUT, reader.read_exact(&mut data)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => return None,
+        Err(_) => {
+            log::warn!("Preview: read_exact timed out waiting for {} bytes of frame data", size);
+            return None;
+        }
     }
 
     Some((type_byte[0], data))

@@ -1,11 +1,12 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRecorderStore } from "@/stores/recorder-store";
 import { cn } from "@/lib/utils";
-import { RefreshCw, AlertTriangle } from "lucide-react";
+import { RefreshCw, AlertTriangle, Loader2 } from "lucide-react";
 import { commands } from "@/lib/tauri";
+import { onUsbWarning } from "@/lib/tauri";
 
 function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -23,8 +24,37 @@ export function CameraPreview() {
   const [restartCounter, setRestartCounter] = useState(0);
   const [retrying, setRetrying] = useState(false);
   const [streamError, setStreamError] = useState(false);
+  const [usbWarning, setUsbWarning] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const lastFrameTime = useRef<number>(Date.now());
 
   const isRecording = status.state === "recording";
+
+  // Listen for USB 2.0 warning events from the backend
+  useEffect(() => {
+    const unlisten = onUsbWarning((msg) => setUsbWarning(msg));
+    return () => { unlisten.then((f) => f()); };
+  }, []);
+
+  // Clear stale USB warning when preview restarts (new subprocess may be on USB 3.0)
+  useEffect(() => {
+    if (previewState === "retrying" || previewState === "starting") {
+      setUsbWarning(null);
+    }
+  }, [previewState]);
+
+  // Stale frame detection: if no img onLoad fires for >5s, show indicator
+  useEffect(() => {
+    if (previewState !== "previewing" && previewState !== "recording") {
+      setStale(false);
+      return;
+    }
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastFrameTime.current;
+      setStale(elapsed > 5000);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [previewState]);
 
   // Detect stream loss via img onerror (works with MJPEG unlike onLoad)
   const handleImgError = useCallback(() => {
@@ -33,11 +63,14 @@ export function CameraPreview() {
 
   const handleImgLoad = useCallback(() => {
     setStreamError(false);
+    setStale(false);
+    lastFrameTime.current = Date.now();
   }, []);
 
   const handleRetry = async () => {
     setRetrying(true);
     setStreamError(false);
+    setUsbWarning(null);
     try {
       await commands.stopPreview().catch(() => {});
       await new Promise((r) => setTimeout(r, 500));
@@ -60,6 +93,18 @@ export function CameraPreview() {
       <div className="flex gap-3 h-[280px]">
         <Skeleton className="flex-[3] rounded-lg" />
         <Skeleton className="flex-[2] rounded-lg" />
+      </div>
+    );
+  }
+
+  // Retrying state: spinner with attempt info
+  if (previewState === "retrying") {
+    return (
+      <div className="flex items-center justify-center h-[280px] rounded-lg border border-yellow-500/30 bg-yellow-900/5">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <Loader2 className="size-8 text-yellow-500 animate-spin" />
+          <p className="text-sm text-muted-foreground">Camera crashed, retrying...</p>
+        </div>
       </div>
     );
   }
@@ -126,6 +171,22 @@ export function CameraPreview() {
           )}
         </div>
       </div>
+
+      {/* USB 2.0 warning banner */}
+      {usbWarning && (
+        <div className="absolute top-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-amber-900/80 text-amber-200 px-3 py-1.5 rounded text-xs backdrop-blur-sm z-10">
+          <AlertTriangle className="size-3 shrink-0" />
+          {usbWarning}
+        </div>
+      )}
+
+      {/* Stream stale indicator */}
+      {stale && !streamError && (
+        <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-yellow-900/80 text-yellow-200 px-2 py-1 rounded text-xs backdrop-blur-sm">
+          <Loader2 className="size-3 animate-spin" />
+          Stream stalled
+        </div>
+      )}
 
       {/* Stream error indicator */}
       {streamError && (

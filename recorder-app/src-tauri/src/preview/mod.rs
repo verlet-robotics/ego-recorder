@@ -35,6 +35,7 @@ pub enum PreviewState {
     Recording,
     Stopping,
     Error,
+    Retrying,
 }
 
 impl Default for PreviewState {
