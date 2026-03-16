@@ -88,6 +88,7 @@ pub fn run() {
             commands::library_commands::get_stream_url,
             commands::library_commands::watch_directory,
             commands::library_commands::get_watched_dir,
+            commands::library_commands::delete_library_file,
             // Settings
             commands::settings_commands::get_config,
             commands::settings_commands::save_config,

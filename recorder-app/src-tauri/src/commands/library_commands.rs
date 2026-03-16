@@ -114,3 +114,34 @@ pub async fn watch_directory(
 pub fn get_watched_dir(state: State<'_, Arc<AppState>>) -> Option<String> {
     state.watched_dir.read().clone()
 }
+
+#[tauri::command]
+pub async fn delete_library_file(
+    file_name: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    let file_path = {
+        let index = state.file_index.read();
+        let entry = index
+            .get(&file_name)
+            .ok_or_else(|| format!("File not in index: {}", file_name))?;
+        entry.path.clone()
+    };
+
+    if !file_path.exists() {
+        // Remove from index even if file is already gone
+        state.file_index.write().remove(&file_name);
+        return Err(format!("File not found on disk: {}", file_path.display()));
+    }
+
+    tokio::fs::remove_file(&file_path)
+        .await
+        .map_err(|e| format!("Failed to delete {}: {}", file_path.display(), e))?;
+
+    state.file_index.write().remove(&file_name);
+    // Evict from MP4 cache if present
+    state.mp4_cache.write().remove(&file_name);
+
+    log::info!("Deleted library file: {}", file_path.display());
+    Ok(())
+}

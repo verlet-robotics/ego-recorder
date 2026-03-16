@@ -41,6 +41,7 @@ export const commands = {
   getStreamUrl: (fileName: string) => invoke<string>("get_stream_url", { fileName }),
   watchDirectory: (dir: string) => invoke<void>("watch_directory", { dir }),
   getWatchedDir: () => invoke<string | null>("get_watched_dir"),
+  deleteLibraryFile: (fileName: string) => invoke<void>("delete_library_file", { fileName }),
 
   // Settings
   getConfig: () => invoke<AppConfig>("get_config"),

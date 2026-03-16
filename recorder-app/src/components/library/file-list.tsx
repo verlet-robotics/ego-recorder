@@ -1,9 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRecorderStore } from "@/stores/recorder-store";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Circle, AlertCircle, Play, FolderOpen } from "lucide-react";
+import { Circle, AlertCircle, Play, FolderOpen, Trash2 } from "lucide-react";
+import { commands } from "@/lib/tauri";
 import type { ConversionStatus, EgorecListItem } from "@/lib/types";
 
 function formatDuration(seconds: number): string {
@@ -37,55 +39,84 @@ function displayName(name: string): string {
   return idx === -1 ? name : name.slice(idx + 1);
 }
 
+function Thumbnail({ file, port }: { file: EgorecListItem; port: number | null }) {
+  if (!port || file.conversionStatus !== "streamable") {
+    return (
+      <div className="w-16 h-10 rounded bg-muted/50 flex items-center justify-center shrink-0">
+        <Circle className="size-3 text-muted-foreground/30" />
+      </div>
+    );
+  }
+
+  const src = `http://localhost:${port}/stream/${encodeURIComponent(file.name)}`;
+
+  return (
+    <video
+      src={src}
+      preload="metadata"
+      muted
+      playsInline
+      className="w-16 h-10 rounded bg-black object-cover shrink-0"
+    />
+  );
+}
+
 function FileItem({
   file,
   isSelected,
   status,
+  port,
   onSelect,
+  onDelete,
 }: {
   file: EgorecListItem;
   isSelected: boolean;
   status: ConversionStatus;
+  port: number | null;
   onSelect: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <button
-      onClick={onSelect}
+    <div
       className={cn(
-        "flex flex-col gap-1 px-3 py-2 rounded-lg text-left transition-colors w-full",
+        "group flex items-start gap-2 px-2 py-1.5 rounded-lg transition-colors cursor-pointer",
         isSelected
           ? "bg-accent text-accent-foreground"
           : "hover:bg-hover text-foreground",
       )}
+      onClick={onSelect}
     >
-      <div className="flex items-center gap-2 min-w-0">
-        <StatusIcon status={status} />
-        <span className="text-[12px] font-medium truncate flex-1">
-          {displayName(file.name)}
-        </span>
-      </div>
+      <Thumbnail file={file} port={port} />
 
-      {file.sessionName && (
-        <span className="text-[10px] text-muted-foreground truncate pl-5">
-          {file.sessionName}
-        </span>
-      )}
+      <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <StatusIcon status={status} />
+          <span className="text-[11px] font-medium truncate flex-1">
+            {displayName(file.name)}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-5 opacity-0 group-hover:opacity-100 shrink-0 text-muted-foreground hover:text-destructive"
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          >
+            <Trash2 className="size-3" />
+          </Button>
+        </div>
 
-      <div className="flex items-center gap-2 pl-5 flex-wrap">
-        <Badge variant="inline">
-          {file.colorWidth}x{file.colorHeight}
-        </Badge>
-        <Badge variant="inline">
-          {formatDuration(file.durationS)}
-        </Badge>
-        <Badge variant="inline">
-          {file.totalFrames} frames
-        </Badge>
-        <Badge variant="inline">
-          {formatSize(file.sizeBytes)}
-        </Badge>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Badge variant="inline">
+            {formatDuration(file.durationS)}
+          </Badge>
+          <Badge variant="inline">
+            {file.totalFrames}f
+          </Badge>
+          <Badge variant="inline">
+            {formatSize(file.sizeBytes)}
+          </Badge>
+        </div>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -94,6 +125,22 @@ export function FileList() {
   const currentFile = useRecorderStore((s) => s.currentFile);
   const conversionStatus = useRecorderStore((s) => s.conversionStatus);
   const selectFile = useRecorderStore((s) => s.selectFile);
+  const removeFile = useRecorderStore((s) => s.removeFile);
+  const videoServerPort = useRecorderStore((s) => s.videoServerPort);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDelete = async (file: EgorecListItem) => {
+    if (deleting) return;
+    setDeleting(file.name);
+    try {
+      await commands.deleteLibraryFile(file.name);
+      removeFile(file.name);
+    } catch (err) {
+      console.error("Failed to delete:", err);
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   // Group files by dataset (subdirectory)
   const groups = useMemo(() => {
@@ -137,7 +184,9 @@ export function FileList() {
                 file={file}
                 isSelected={file.name === currentFile}
                 status={conversionStatus[file.name] ?? file.conversionStatus}
+                port={videoServerPort}
                 onSelect={() => selectFile(file.name)}
+                onDelete={() => handleDelete(file)}
               />
             ))}
           </div>
