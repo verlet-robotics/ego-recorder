@@ -88,7 +88,17 @@ fi
 mkdir -p "$INSTALL_DIR"
 cp "$BINARY_SRC" "$INSTALL_DIR/$APP_NAME"
 chmod +x "$INSTALL_DIR/$APP_NAME"
-ok "Binary installed to $INSTALL_DIR/$APP_NAME"
+ok "Tauri app installed to $INSTALL_DIR/$APP_NAME"
+
+# Also install the C++ ego-recorder binary so the app can find it
+CPP_BINARY="../build/ego-recorder"
+if [[ -x "$CPP_BINARY" ]]; then
+    cp "$CPP_BINARY" "$INSTALL_DIR/ego-recorder"
+    chmod +x "$INSTALL_DIR/ego-recorder"
+    ok "C++ recorder installed to $INSTALL_DIR/ego-recorder"
+else
+    warn "C++ binary not found at $CPP_BINARY — app will search PATH and build dirs"
+fi
 
 # Ensure ~/.local/bin is on PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then

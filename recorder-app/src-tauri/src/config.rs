@@ -165,11 +165,14 @@ pub fn is_first_run() -> bool {
     !config_path().exists()
 }
 
-/// Search for the ego-recorder binary in PATH and common relative locations.
+/// Search for the ego-recorder binary in PATH, well-known locations, and
+/// by walking up from the app binary / cwd looking for `build/ego-recorder`.
 pub fn locate_binary() -> Option<String> {
-    // Check PATH first
+    let binary_name = "ego-recorder";
+
+    // 1. Check PATH
     if let Ok(output) = std::process::Command::new("which")
-        .arg("ego-recorder")
+        .arg(binary_name)
         .output()
     {
         if output.status.success() {
@@ -180,36 +183,51 @@ pub fn locate_binary() -> Option<String> {
         }
     }
 
-    // Check common relative locations from the app binary
-    let relative_paths = [
-        "../build/ego-recorder",
-        "../../build/ego-recorder",
-        "../ego-recorder",
+    // 2. Check well-known install locations
+    let home = std::env::var("HOME").unwrap_or_default();
+    let fixed_paths: Vec<PathBuf> = vec![
+        PathBuf::from(&home).join(".local/bin").join(binary_name),
+        PathBuf::from("/usr/local/bin").join(binary_name),
     ];
+    for candidate in &fixed_paths {
+        if candidate.is_file() {
+            return candidate.canonicalize().ok().map(|p| p.to_string_lossy().to_string());
+        }
+    }
 
+    // 3. Walk up from the app binary directory looking for build/ego-recorder.
+    //    The Tauri binary lives at recorder-app/src-tauri/target/{debug,release}/
+    //    while the C++ binary is at <repo>/build/ego-recorder, so we need to
+    //    walk up several levels.
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
-    if let Some(dir) = &exe_dir {
-        for rel in &relative_paths {
-            let candidate = dir.join(rel);
-            if candidate.exists() {
-                return candidate.canonicalize().ok().map(|p| p.to_string_lossy().to_string());
-            }
+    if let Some(found) = exe_dir.as_ref().and_then(|dir| walk_up_for_binary(dir, binary_name)) {
+        return Some(found);
+    }
+
+    // 4. Walk up from cwd (covers running from recorder-app/ or repo root)
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(found) = walk_up_for_binary(&cwd, binary_name) {
+            return Some(found);
         }
     }
 
-    // Also check from cwd
-    for rel in &relative_paths {
-        let candidate = PathBuf::from(rel);
-        if candidate.exists() {
-            return candidate
-                .canonicalize()
-                .ok()
-                .map(|p| p.to_string_lossy().to_string());
+    None
+}
+
+/// Walk up from `start` checking `build/<name>` at each ancestor, up to 8 levels.
+fn walk_up_for_binary(start: &std::path::Path, name: &str) -> Option<String> {
+    let mut dir = start.to_path_buf();
+    for _ in 0..8 {
+        let candidate = dir.join("build").join(name);
+        if candidate.is_file() {
+            return candidate.canonicalize().ok().map(|p| p.to_string_lossy().to_string());
+        }
+        if !dir.pop() {
+            break;
         }
     }
-
     None
 }
