@@ -85,6 +85,8 @@ bool PreviewPresenter::start()
         }
     }
 
+    fprintf(stderr, "[preview] Full=%dx%d  Half=%dx%d\n", width_, height_, half_w_, half_h_);
+
     stdin_thread_ = std::thread([this]() { stdin_reader_loop(); });
     preview_thread_ = std::thread([this]() { preview_thread_loop(); });
 

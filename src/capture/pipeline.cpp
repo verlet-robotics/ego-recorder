@@ -168,6 +168,11 @@ std::optional<CapturedFrame> RealSensePipeline::poll_frame(unsigned int timeout_
         const int w = color.get_width();
         const int h = color.get_height();
         const int row_bytes = w * 3;  // RGB8 = 3 bytes/pixel
+        if (frame_counter_ == 0) {
+            fprintf(stderr, "RGB frame: %dx%d stride=%d row_bytes=%d %s\n",
+                    w, h, stride, row_bytes,
+                    stride == row_bytes ? "(packed)" : "(PADDING)");
+        }
         if (stride == row_bytes) {
             cf.rgb_data.assign(ptr, ptr + row_bytes * h);
         } else {
