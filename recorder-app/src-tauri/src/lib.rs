@@ -118,6 +118,7 @@ pub fn run() {
             commands::dataset_commands::upload_dataset,
             commands::dataset_commands::convert_dataset,
             commands::dataset_commands::get_conversion_status,
+            commands::dataset_commands::clear_uploaded_datasets,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ego-recorder-app");

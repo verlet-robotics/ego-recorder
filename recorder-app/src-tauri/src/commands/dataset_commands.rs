@@ -360,6 +360,43 @@ pub fn get_conversion_status(
     state.conversion_progress.read().clone()
 }
 
+/// Delete all datasets whose files have been fully uploaded to R2.
+/// Returns the list of dataset names that were deleted.
+#[tauri::command]
+pub async fn clear_uploaded_datasets(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<String>, String> {
+    let output_dir = {
+        let config = state.config.read();
+        config
+            .storage
+            .output_dir
+            .clone()
+            .ok_or("No output directory configured")?
+    };
+
+    let dir = PathBuf::from(&output_dir);
+    tokio::task::spawn_blocking(move || {
+        let summaries = scan_datasets(&dir);
+        let mut cleared = Vec::new();
+
+        for ds in &summaries {
+            if ds.file_count > 0 && ds.uploaded_count >= ds.file_count {
+                let dataset_dir = dir.join(&ds.dir_name);
+                if let Err(e) = manifest::delete_dataset(&dataset_dir) {
+                    log::error!("Failed to delete uploaded dataset '{}': {}", ds.name, e);
+                } else {
+                    cleared.push(ds.name.clone());
+                }
+            }
+        }
+
+        Ok(cleared)
+    })
+    .await
+    .map_err(|e| format!("Task error: {}", e))?
+}
+
 /// Scan .egorec files in a dataset directory and return as EgorecListItem list.
 fn scan_dataset_files(dataset_dir: &std::path::Path, dir_name: &str) -> Result<Vec<EgorecListItem>, String> {
     use egorec::format::*;

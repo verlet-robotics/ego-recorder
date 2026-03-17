@@ -76,6 +76,7 @@ export const commands = {
   uploadDataset: (dirName: string) => invoke<number>("upload_dataset", { dirName }),
   convertDataset: (dirName: string) => invoke<void>("convert_dataset", { dirName }),
   getConversionStatus: () => invoke<ConversionProgress | null>("get_conversion_status"),
+  clearUploadedDatasets: () => invoke<string[]>("clear_uploaded_datasets"),
 };
 
 // Event listeners

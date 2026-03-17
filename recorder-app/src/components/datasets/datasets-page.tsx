@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useDatasetStore } from "@/stores/dataset-store";
 import { commands, onConversionProgress, onUploadProgress } from "@/lib/tauri";
 import { DatasetCard } from "./dataset-card";
 import { CreateDatasetForm } from "./create-dataset-form";
-import { Plus, Database } from "lucide-react";
+import { Plus, Database, Trash2 } from "lucide-react";
 
 export function DatasetsPage() {
   const datasets = useDatasetStore((s) => s.datasets);
@@ -18,6 +19,8 @@ export function DatasetsPage() {
   const updateUploadStats = useDatasetStore((s) => s.updateUploadStats);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refreshUploadQueue = useCallback(async () => {
@@ -126,20 +129,52 @@ export function DatasetsPage() {
     }
   };
 
+  const uploadedDatasets = useMemo(
+    () => datasets.filter((ds) => ds.fileCount > 0 && ds.uploadedCount >= ds.fileCount),
+    [datasets],
+  );
+
+  const handleClearUploaded = async () => {
+    setError(null);
+    setClearing(true);
+    try {
+      await commands.clearUploadedDatasets();
+      setShowClearConfirm(false);
+      refresh();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full p-6 gap-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Datasets</h1>
-        <Button
-          size="sm"
-          className="gap-1.5"
-          onClick={() => setShowCreateForm(true)}
-          disabled={showCreateForm}
-        >
-          <Plus className="size-3.5" />
-          New Dataset
-        </Button>
+        <div className="flex items-center gap-2">
+          {uploadedDatasets.length > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 text-destructive hover:text-destructive"
+              onClick={() => setShowClearConfirm(true)}
+            >
+              <Trash2 className="size-3.5" />
+              Clear Uploaded
+            </Button>
+          )}
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => setShowCreateForm(true)}
+            disabled={showCreateForm}
+          >
+            <Plus className="size-3.5" />
+            New Dataset
+          </Button>
+        </div>
       </div>
 
       {/* Error display */}
@@ -191,6 +226,32 @@ export function DatasetsPage() {
           ))
         )}
       </div>
+
+      {/* Clear uploaded datasets confirmation */}
+      <ConfirmDialog
+        open={showClearConfirm}
+        title="Clear uploaded datasets?"
+        description={`This will permanently delete ${uploadedDatasets.length} dataset${uploadedDatasets.length !== 1 ? "s" : ""} from this device. All files have already been uploaded to R2.`}
+        confirmLabel="Delete All"
+        destructive
+        loading={clearing}
+        onConfirm={handleClearUploaded}
+        onCancel={() => setShowClearConfirm(false)}
+      >
+        <div className="max-h-40 overflow-y-auto space-y-1">
+          {uploadedDatasets.map((ds) => (
+            <div
+              key={ds.dirName}
+              className="flex items-center justify-between rounded px-2 py-1 text-sm bg-surface"
+            >
+              <span className="truncate">{ds.name}</span>
+              <span className="text-xs text-muted-foreground shrink-0 ml-2">
+                {ds.fileCount} ep{ds.fileCount !== 1 ? "s" : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      </ConfirmDialog>
     </div>
   );
 }

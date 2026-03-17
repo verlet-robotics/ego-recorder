@@ -63,17 +63,12 @@ export function UploadStatusBar() {
               {currentFile.filename.split("/").pop()}
             </p>
             {currentFile.status.kind === "uploading" && (
-              <div className="flex items-center gap-2 mt-0.5">
-                <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-highlight transition-all duration-300"
-                    style={{ width: `${Math.min(currentFile.status.progress * 100, 100)}%` }}
-                  />
-                </div>
-                <span className="text-[9px] text-muted-foreground tabular-nums shrink-0">
-                  {Math.round(currentFile.status.progress * 100)}%
-                </span>
-              </div>
+              <p className="text-[9px] text-muted-foreground tabular-nums mt-0.5">
+                {Math.round(currentFile.status.progress * 100)}%
+                {currentFile.status.speedBps > 0 && (
+                  <> · {formatSpeed(currentFile.status.speedBps)}</>
+                )}
+              </p>
             )}
             {currentFile.status.kind === "hashing" && (
               <p className="text-[9px] text-muted-foreground mt-0.5">Hashing...</p>
@@ -113,4 +108,11 @@ export function UploadStatusBar() {
       </div>
     </button>
   );
+}
+
+function formatSpeed(bps: number): string {
+  const mbps = (bps * 8) / 1_000_000;
+  if (mbps >= 1) return `${mbps.toFixed(1)} Mbps`;
+  const kbps = (bps * 8) / 1_000;
+  return `${kbps.toFixed(0)} kbps`;
 }
