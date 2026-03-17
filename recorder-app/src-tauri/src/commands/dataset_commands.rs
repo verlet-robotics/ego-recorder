@@ -200,9 +200,21 @@ pub async fn upload_dataset(
     {
         let mut queue = state.upload_queue.write();
         for (file_path, filename, size_bytes) in files_to_upload {
-            if queue.iter().any(|e| e.filename == filename) {
+            // Skip files that are currently in-flight (pending, hashing, or uploading)
+            let dominated = queue.iter().any(|e| {
+                e.filename == filename
+                    && matches!(
+                        e.status,
+                        QueueStatus::Pending
+                            | QueueStatus::Hashing { .. }
+                            | QueueStatus::Uploading { .. }
+                    )
+            });
+            if dominated {
                 continue;
             }
+            // Remove stale failed/completed entries so we can re-queue
+            queue.retain(|e| e.filename != filename);
             queue.push(UploadQueueEntry {
                 filename: filename.clone(),
                 path: file_path.to_string_lossy().to_string(),
