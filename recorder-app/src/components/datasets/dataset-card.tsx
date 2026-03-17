@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { DatasetSummary, ConversionProgress } from "@/lib/types";
+import type { DatasetUploadStats } from "@/stores/dataset-store";
 import { cn } from "@/lib/utils";
 import {
   Upload,
@@ -10,11 +11,13 @@ import {
   FileVideo,
   Clock,
   HardDrive,
+  ArrowUpCircle,
 } from "lucide-react";
 
 interface DatasetCardProps {
   dataset: DatasetSummary;
   conversionProgress: ConversionProgress | null;
+  uploadStats: DatasetUploadStats | null;
   onUpload: () => void;
   onConvert: () => void;
   onDelete: () => void;
@@ -23,6 +26,7 @@ interface DatasetCardProps {
 export function DatasetCard({
   dataset,
   conversionProgress,
+  uploadStats,
   onUpload,
   onConvert,
   onDelete,
@@ -113,19 +117,56 @@ export function DatasetCard({
           <HardDrive className="size-3" />
           {formatSize(dataset.totalSizeBytes)}
         </span>
-        {dataset.fileCount > 0 && (
-          <span
-            className={cn(
-              "flex items-center gap-1",
-              dataset.uploadedCount >= dataset.fileCount
-                ? "text-highlight-foreground"
-                : "",
-            )}
-          >
-            <Upload className="size-3" />
-            {dataset.uploadedCount}/{dataset.fileCount} uploaded
-          </span>
-        )}
+        {dataset.fileCount > 0 && (() => {
+          const isUploading = uploadStats && uploadStats.totalFiles > 0 && uploadStats.completedFiles < uploadStats.totalFiles;
+          const overallProgress = isUploading && uploadStats.totalBytes > 0
+            ? uploadStats.bytesUploaded / uploadStats.totalBytes
+            : 0;
+          const remainingBytes = isUploading ? uploadStats.totalBytes - uploadStats.bytesUploaded : 0;
+          const etaSeconds = isUploading && uploadStats.speedBps > 0 ? remainingBytes / uploadStats.speedBps : null;
+
+          return (
+            <>
+              <span
+                className={cn(
+                  "flex items-center gap-1",
+                  dataset.uploadedCount >= dataset.fileCount
+                    ? "text-highlight-foreground"
+                    : isUploading
+                      ? "text-highlight-foreground"
+                      : "",
+                )}
+              >
+                {isUploading ? (
+                  <ArrowUpCircle className="size-3 animate-pulse" />
+                ) : (
+                  <Upload className="size-3" />
+                )}
+                {dataset.uploadedCount}/{dataset.fileCount} uploaded
+                {isUploading && (
+                  <span className="font-mono tabular-nums ml-0.5">
+                    ({Math.round(overallProgress * 100)}%)
+                  </span>
+                )}
+              </span>
+              {isUploading && uploadStats.speedBps > 0 && (
+                <span className="flex items-center gap-1 font-mono tabular-nums text-highlight-foreground">
+                  {formatSize(uploadStats.speedBps)}/s
+                </span>
+              )}
+              {isUploading && etaSeconds !== null && (
+                <span className="font-mono tabular-nums">
+                  ETA {formatDuration(etaSeconds)}
+                </span>
+              )}
+              {isUploading && uploadStats.failedFiles > 0 && (
+                <span className="text-destructive">
+                  {uploadStats.failedFiles} failed
+                </span>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Conversion progress bar */}

@@ -178,6 +178,9 @@ async fn upload_loop(app_handle: tauri::AppHandle, state: Arc<AppState>) {
 
             // Upload
             let client = s3_client.as_ref().unwrap();
+            let state_for_progress = state.clone();
+            let filename_for_progress = entry.filename.clone();
+            let entry_for_progress = entry.clone();
             match upload_file(
                 client,
                 bucket,
@@ -186,6 +189,19 @@ async fn upload_loop(app_handle: tauri::AppHandle, state: Arc<AppState>) {
                 chunk_mb,
                 &app_handle,
                 &entry.filename,
+                move |bytes_transferred, total_bytes, speed_bps| {
+                    let progress = if total_bytes > 0 {
+                        bytes_transferred as f64 / total_bytes as f64
+                    } else {
+                        0.0
+                    };
+                    update_queue_status(
+                        &state_for_progress,
+                        &filename_for_progress,
+                        &entry_for_progress,
+                        QueueStatus::Uploading { progress, speed_bps },
+                    );
+                },
             )
             .await
             {

@@ -97,6 +97,7 @@ where
 }
 
 /// Upload a file to S3. Uses single PutObject for small files, multipart for large.
+/// `on_chunk_done` is called after each multipart chunk with (bytes_transferred, total_bytes, speed_bps).
 pub async fn upload_file(
     client: &aws_sdk_s3::Client,
     bucket: &str,
@@ -105,6 +106,7 @@ pub async fn upload_file(
     chunk_mb: u32,
     app_handle: &tauri::AppHandle,
     filename: &str,
+    on_chunk_done: impl Fn(u64, u64, u64),
 ) -> Result<(), String> {
     let file_size = std::fs::metadata(path)
         .map_err(|e| format!("Failed to get file metadata: {}", e))?
@@ -113,7 +115,7 @@ pub async fn upload_file(
     if file_size < MULTIPART_THRESHOLD {
         upload_single(client, bucket, key, path).await
     } else {
-        upload_multipart(client, bucket, key, path, file_size, chunk_mb, app_handle, filename).await
+        upload_multipart(client, bucket, key, path, file_size, chunk_mb, app_handle, filename, &on_chunk_done).await
     }
 }
 
@@ -151,6 +153,7 @@ async fn upload_multipart(
     chunk_mb: u32,
     app_handle: &tauri::AppHandle,
     filename: &str,
+    on_chunk_done: &impl Fn(u64, u64, u64),
 ) -> Result<(), String> {
     let chunk_size = (chunk_mb as u64) * 1024 * 1024;
 
@@ -254,6 +257,7 @@ async fn upload_multipart(
             phase: "uploading".to_string(),
         };
         let _ = app_handle.emit("upload:progress", &progress);
+        on_chunk_done(offset, file_size, speed_bps);
     }
 
     // Complete multipart

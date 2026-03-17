@@ -576,6 +576,8 @@ async fn upload_single_file(
         },
     );
 
+    let state_for_progress = state.clone();
+    let filename_for_progress = filename.clone();
     match upload_file(
         &client,
         &bucket,
@@ -584,6 +586,18 @@ async fn upload_single_file(
         chunk_mb,
         &app_handle,
         &filename,
+        move |bytes_transferred, total_bytes, speed_bps| {
+            let progress = if total_bytes > 0 {
+                bytes_transferred as f64 / total_bytes as f64
+            } else {
+                0.0
+            };
+            set_queue_status(
+                &state_for_progress,
+                &filename_for_progress,
+                QueueStatus::Uploading { progress, speed_bps },
+            );
+        },
     )
     .await
     {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { useDatasetStore } from "@/stores/dataset-store";
-import { commands, onConversionProgress } from "@/lib/tauri";
+import { commands, onConversionProgress, onUploadProgress } from "@/lib/tauri";
 import { DatasetCard } from "./dataset-card";
 import { CreateDatasetForm } from "./create-dataset-form";
 import { Plus, Database } from "lucide-react";
@@ -14,8 +14,18 @@ export function DatasetsPage() {
   const loading = useDatasetStore((s) => s.loading);
   const setLoading = useDatasetStore((s) => s.setLoading);
 
+  const uploadStats = useDatasetStore((s) => s.uploadStats);
+  const updateUploadStats = useDatasetStore((s) => s.updateUploadStats);
+
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const refreshUploadQueue = useCallback(async () => {
+    try {
+      const queue = await commands.getUploadQueue();
+      updateUploadStats(queue);
+    } catch {}
+  }, [updateUploadStats]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -33,6 +43,17 @@ export function DatasetsPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Poll upload queue + subscribe to progress events for real-time stats
+  useEffect(() => {
+    refreshUploadQueue();
+    const interval = setInterval(refreshUploadQueue, 3000);
+    const unlistenUpload = onUploadProgress(() => refreshUploadQueue());
+    return () => {
+      clearInterval(interval);
+      unlistenUpload.then((fn) => fn());
+    };
+  }, [refreshUploadQueue]);
 
   // Subscribe to conversion progress events
   useEffect(() => {
@@ -88,6 +109,8 @@ export function DatasetsPage() {
       const count = await commands.uploadDataset(dirName);
       if (count === 0) {
         setError("No new files to upload in this dataset.");
+      } else {
+        refreshUploadQueue();
       }
     } catch (err) {
       setError(String(err));
@@ -160,6 +183,7 @@ export function DatasetsPage() {
               key={ds.dirName}
               dataset={ds}
               conversionProgress={conversionProgress}
+              uploadStats={uploadStats[ds.dirName] ?? null}
               onUpload={() => handleUpload(ds.dirName)}
               onConvert={() => handleConvert(ds.dirName)}
               onDelete={() => handleDelete(ds.dirName)}
