@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useDatasetStore } from "@/stores/dataset-store";
@@ -22,8 +22,10 @@ export function DatasetsPage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pausePolling = useRef(false);
 
   const refreshUploadQueue = useCallback(async () => {
+    if (pausePolling.current) return;
     try {
       const queue = await commands.getUploadQueue();
       updateUploadStats(queue);
@@ -137,14 +139,17 @@ export function DatasetsPage() {
   const handleClearUploaded = async () => {
     setError(null);
     setClearing(true);
+    pausePolling.current = true;
     try {
-      await commands.clearUploadedDatasets();
+      const dirNames = uploadedDatasets.map((ds) => ds.dirName);
+      await commands.clearUploadedDatasets(dirNames);
       setShowClearConfirm(false);
-      refresh();
+      await refresh();
     } catch (err) {
       setError(String(err));
     } finally {
       setClearing(false);
+      pausePolling.current = false;
     }
   };
 

@@ -360,12 +360,18 @@ pub fn get_conversion_status(
     state.conversion_progress.read().clone()
 }
 
-/// Delete all datasets whose files have been fully uploaded to R2.
-/// Returns the list of dataset names that were deleted.
+/// Delete the specified datasets by dir name.
+/// The frontend is responsible for determining which datasets are fully uploaded.
+/// Returns the list of dir names that were successfully deleted.
 #[tauri::command]
 pub async fn clear_uploaded_datasets(
+    dir_names: Vec<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<String>, String> {
+    if dir_names.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let output_dir = {
         let config = state.config.read();
         config
@@ -377,17 +383,16 @@ pub async fn clear_uploaded_datasets(
 
     let dir = PathBuf::from(&output_dir);
     tokio::task::spawn_blocking(move || {
-        let summaries = scan_datasets(&dir);
         let mut cleared = Vec::new();
 
-        for ds in &summaries {
-            if ds.file_count > 0 && ds.uploaded_count >= ds.file_count {
-                let dataset_dir = dir.join(&ds.dir_name);
-                if let Err(e) = manifest::delete_dataset(&dataset_dir) {
-                    log::error!("Failed to delete uploaded dataset '{}': {}", ds.name, e);
-                } else {
-                    cleared.push(ds.name.clone());
-                }
+        for dir_name in &dir_names {
+            let dataset_dir = dir.join(dir_name);
+            if !dataset_dir.exists() {
+                continue;
+            }
+            match manifest::delete_dataset(&dataset_dir) {
+                Ok(()) => cleared.push(dir_name.clone()),
+                Err(e) => log::error!("Failed to delete dataset '{}': {}", dir_name, e),
             }
         }
 
