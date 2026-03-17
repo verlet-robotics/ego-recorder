@@ -24,6 +24,7 @@ import { StatsPanel } from "./stats-panel";
 import { DiskBar } from "./disk-bar";
 import { CountdownOverlay } from "./countdown-overlay";
 import { CameraPreview } from "./camera-preview";
+import { UploadStatusBar } from "./upload-status-bar";
 import {
   Circle,
   Square,
@@ -611,6 +612,9 @@ export function RecordPage() {
           threshold={config?.storage.disk_threshold_mb ?? 500}
         />
       )}
+
+      {/* Upload status */}
+      <UploadStatusBar />
 
       <div className="mt-auto" />
     </div>

@@ -2,6 +2,7 @@ use crate::library::EgorecListItem;
 use crate::dataset::convert::{convert_dataset_to_lerobot, ConversionProgress};
 use crate::dataset::manifest;
 use crate::dataset::scan::{scan_datasets, DatasetSummary};
+use crate::recorder::status::RecorderState;
 use crate::state::{AppState, ConversionStatus, EgorecMetadataDto};
 use crate::upload::upload_queue::{load_manifest as load_upload_manifest, QueueStatus, UploadQueueEntry};
 use crate::upload::s3_upload::{build_s3_client, compute_sha256, make_object_key, upload_file, UploadProgressEvent};
@@ -188,127 +189,41 @@ pub async fn upload_dataset(
         }
     }
 
-    let count = files_to_upload.len();
-
     // Queue each file for upload
     let bucket = upload_config
         .bucket
         .clone()
         .ok_or("Bucket not configured")?;
 
-    for (file_path, filename, size_bytes) in files_to_upload {
-        let r2_key = make_object_key(upload_config.prefix.as_deref(), &filename);
-
-        // Add to in-memory queue
-        {
-            let mut queue = state.upload_queue.write();
+    // Add all files to queue as Pending (filter out already-queued)
+    let mut queued_files = Vec::new();
+    {
+        let mut queue = state.upload_queue.write();
+        for (file_path, filename, size_bytes) in files_to_upload {
             if queue.iter().any(|e| e.filename == filename) {
-                continue; // Already in queue
+                continue;
             }
             queue.push(UploadQueueEntry {
                 filename: filename.clone(),
                 path: file_path.to_string_lossy().to_string(),
                 size_bytes,
-                status: QueueStatus::Hashing { progress: 0.0 },
+                status: QueueStatus::Pending,
             });
+            queued_files.push((file_path, filename, size_bytes));
         }
+    }
 
-        // Spawn upload task
+    let count = queued_files.len();
+
+    if !queued_files.is_empty() {
         let state_clone = state.inner().clone();
         let app_handle_clone = app_handle.clone();
-        let upload_config_clone = upload_config.clone();
-        let bucket_clone = bucket.clone();
-        let output_dir_clone = output_path.clone();
 
         tauri::async_runtime::spawn(async move {
-            // Hash
-            let filename_for_hash = filename.clone();
-            let app_handle_hash = app_handle_clone.clone();
-            let sha256 = match compute_sha256(&file_path, size_bytes, move |bytes_done| {
-                let progress = UploadProgressEvent {
-                    filename: filename_for_hash.clone(),
-                    bytes_transferred: bytes_done,
-                    total_bytes: size_bytes,
-                    speed_bps: 0,
-                    phase: "hashing".to_string(),
-                };
-                let _ = app_handle_hash.emit("upload:progress", &progress);
-            })
-            .await
-            {
-                Ok(h) => h,
-                Err(e) => {
-                    set_queue_status(&state_clone, &filename, QueueStatus::Failed { error: e });
-                    return;
-                }
-            };
-
-            set_queue_status(
-                &state_clone,
-                &filename,
-                QueueStatus::Uploading {
-                    progress: 0.0,
-                    speed_bps: 0,
-                },
-            );
-
-            let client = match build_s3_client(&upload_config_clone) {
-                Ok(c) => c,
-                Err(e) => {
-                    set_queue_status(&state_clone, &filename, QueueStatus::Failed { error: e });
-                    return;
-                }
-            };
-
-            match upload_file(
-                &client,
-                &bucket_clone,
-                &r2_key,
-                &file_path,
-                upload_config_clone.multipart_chunk_mb,
-                &app_handle_clone,
-                &filename,
-            )
-            .await
-            {
-                Ok(()) => {
-                    let mut manifest =
-                        crate::upload::upload_queue::load_manifest(&output_dir_clone);
-                    crate::upload::upload_queue::record_upload(
-                        &mut manifest,
-                        filename.clone(),
-                        r2_key,
-                        size_bytes,
-                        sha256.clone(),
-                        1,
-                    );
-                    if let Err(e) =
-                        crate::upload::upload_queue::save_manifest(&output_dir_clone, &manifest)
-                    {
-                        log::error!("Failed to save manifest: {}", e);
-                    }
-
-                    set_queue_status(
-                        &state_clone,
-                        &filename,
-                        QueueStatus::Completed {
-                            sha256: sha256.clone(),
-                        },
-                    );
-
-                    let progress = UploadProgressEvent {
-                        filename,
-                        bytes_transferred: size_bytes,
-                        total_bytes: size_bytes,
-                        speed_bps: 0,
-                        phase: "completed".to_string(),
-                    };
-                    let _ = app_handle_clone.emit("upload:progress", &progress);
-                }
-                Err(e) => {
-                    set_queue_status(&state_clone, &filename, QueueStatus::Failed { error: e });
-                }
-            }
+            upload_dataset_files(
+                queued_files, state_clone, app_handle_clone,
+                upload_config, bucket, output_path,
+            ).await;
         });
     }
 
@@ -517,6 +432,179 @@ fn scan_dataset_files(dataset_dir: &std::path::Path, dir_name: &str) -> Result<V
 
     items.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(items)
+}
+
+/// Result of a successful single-file upload (returned to orchestrator for manifest write).
+struct UploadResult {
+    filename: String,
+    r2_key: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
+/// Orchestrate uploading a batch of files with bounded concurrency (max 2 in-flight).
+/// Manifest writes happen here (sequentially) to avoid concurrent-write races.
+async fn upload_dataset_files(
+    files: Vec<(PathBuf, String, u64)>,
+    state: Arc<AppState>,
+    app_handle: tauri::AppHandle,
+    upload_config: crate::config::UploadConfig,
+    bucket: String,
+    output_path: PathBuf,
+) {
+    // Build one shared S3 client for the whole batch
+    let client = match build_s3_client(&upload_config) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            // Mark all files as failed
+            for (_, filename, _) in &files {
+                set_queue_status(&state, filename, QueueStatus::Failed { error: e.clone() });
+            }
+            return;
+        }
+    };
+
+    const MAX_CONCURRENT: usize = 2;
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut file_iter = files.into_iter();
+
+    // Seed with initial batch
+    for _ in 0..MAX_CONCURRENT {
+        if let Some((file_path, filename, size_bytes)) = file_iter.next() {
+            let r2_key = make_object_key(upload_config.prefix.as_deref(), &filename);
+            join_set.spawn(upload_single_file(
+                file_path, filename, size_bytes, r2_key,
+                state.clone(), app_handle.clone(), client.clone(),
+                upload_config.multipart_chunk_mb, bucket.clone(),
+            ));
+        }
+    }
+
+    // As each completes, record in manifest (sequential — no race), then spawn next
+    while let Some(result) = join_set.join_next().await {
+        if let Ok(Some(upload)) = result {
+            let mut manifest = crate::upload::upload_queue::load_manifest(&output_path);
+            crate::upload::upload_queue::record_upload(
+                &mut manifest,
+                upload.filename,
+                upload.r2_key,
+                upload.size_bytes,
+                upload.sha256,
+                1,
+            );
+            if let Err(e) = crate::upload::upload_queue::save_manifest(&output_path, &manifest) {
+                log::error!("Failed to save manifest: {}", e);
+            }
+        }
+
+        if let Some((file_path, filename, size_bytes)) = file_iter.next() {
+            let r2_key = make_object_key(upload_config.prefix.as_deref(), &filename);
+            join_set.spawn(upload_single_file(
+                file_path, filename, size_bytes, r2_key,
+                state.clone(), app_handle.clone(), client.clone(),
+                upload_config.multipart_chunk_mb, bucket.clone(),
+            ));
+        }
+    }
+}
+
+/// Upload a single file: hash → upload. Returns [UploadResult] on success for manifest recording.
+async fn upload_single_file(
+    file_path: PathBuf,
+    filename: String,
+    size_bytes: u64,
+    r2_key: String,
+    state: Arc<AppState>,
+    app_handle: tauri::AppHandle,
+    client: Arc<aws_sdk_s3::Client>,
+    base_chunk_mb: u32,
+    bucket: String,
+) -> Option<UploadResult> {
+    // Hash
+    set_queue_status(&state, &filename, QueueStatus::Hashing { progress: 0.0 });
+
+    let filename_for_hash = filename.clone();
+    let app_handle_hash = app_handle.clone();
+    let sha256 = match compute_sha256(&file_path, size_bytes, move |bytes_done| {
+        let progress = UploadProgressEvent {
+            filename: filename_for_hash.clone(),
+            bytes_transferred: bytes_done,
+            total_bytes: size_bytes,
+            speed_bps: 0,
+            phase: "hashing".to_string(),
+        };
+        let _ = app_handle_hash.emit("upload:progress", &progress);
+    })
+    .await
+    {
+        Ok(h) => h,
+        Err(e) => {
+            set_queue_status(&state, &filename, QueueStatus::Failed { error: e });
+            return None;
+        }
+    };
+
+    // Throttle chunk size during recording
+    let is_recording = {
+        let status = state.recorder_status.read();
+        status.state == RecorderState::Recording
+    };
+    let chunk_mb = if is_recording {
+        std::cmp::min(base_chunk_mb, 5)
+    } else {
+        base_chunk_mb
+    };
+
+    set_queue_status(
+        &state,
+        &filename,
+        QueueStatus::Uploading {
+            progress: 0.0,
+            speed_bps: 0,
+        },
+    );
+
+    match upload_file(
+        &client,
+        &bucket,
+        &r2_key,
+        &file_path,
+        chunk_mb,
+        &app_handle,
+        &filename,
+    )
+    .await
+    {
+        Ok(()) => {
+            set_queue_status(
+                &state,
+                &filename,
+                QueueStatus::Completed {
+                    sha256: sha256.clone(),
+                },
+            );
+
+            let progress = UploadProgressEvent {
+                filename: filename.clone(),
+                bytes_transferred: size_bytes,
+                total_bytes: size_bytes,
+                speed_bps: 0,
+                phase: "completed".to_string(),
+            };
+            let _ = app_handle.emit("upload:progress", &progress);
+
+            Some(UploadResult {
+                filename,
+                r2_key,
+                size_bytes,
+                sha256,
+            })
+        }
+        Err(e) => {
+            set_queue_status(&state, &filename, QueueStatus::Failed { error: e });
+            None
+        }
+    }
 }
 
 fn set_queue_status(state: &AppState, filename: &str, status: QueueStatus) {
