@@ -95,10 +95,18 @@ class FacilityCfg:
 
 
 @dataclass
+class CentralApiCfg:
+    """Central backend API config for registering episodes after upload."""
+    url: str = ""              # e.g. "https://api.verlet.co"
+    worker_secret: str = ""    # WORKER_API_SECRET for X-Worker-Secret auth
+
+
+@dataclass
 class AppConfig:
     cloud: CloudCfg = field(default_factory=CloudCfg)
     upload: UploadCfg = field(default_factory=UploadCfg)
     facility: FacilityCfg = field(default_factory=FacilityCfg)
+    central: CentralApiCfg = field(default_factory=CentralApiCfg)
 
 
 def load_config(path: Path) -> AppConfig:
@@ -137,6 +145,11 @@ def load_config(path: Path) -> AppConfig:
             if k in facility:
                 setattr(cfg.facility, k, facility[k])
 
+        central = raw.get("central", {})
+        for k in ("url", "worker_secret"):
+            if k in central:
+                setattr(cfg.central, k, central[k])
+
     # R2 credentials from environment variables (.env file)
     cfg.cloud.endpoint          = os.environ.get("R2_ENDPOINT", cfg.cloud.endpoint)
     cfg.cloud.access_key_id     = os.environ.get("R2_ACCESS_KEY_ID", cfg.cloud.access_key_id)
@@ -147,6 +160,10 @@ def load_config(path: Path) -> AppConfig:
     if os.environ.get("FACILITY_URL"):
         cfg.facility.url = os.environ["FACILITY_URL"]
         cfg.facility.enabled = True
+
+    # Central API from env
+    cfg.central.url = os.environ.get("TELEOP_API_URL", cfg.central.url)
+    cfg.central.worker_secret = os.environ.get("WORKER_API_SECRET", cfg.central.worker_secret)
 
     return cfg
 
@@ -335,6 +352,104 @@ class FacilityClient:
         except (urllib.error.URLError, OSError) as e:
             log.warning("Failed to complete episode on facility: %s", e)
             return False
+
+
+# ---------------------------------------------------------------------------
+# Central API episode sync (register uploaded episodes in backend DB)
+# ---------------------------------------------------------------------------
+
+def sync_episode_to_central(
+    cfg: CentralApiCfg,
+    episodes_dir: Path,
+    pending: "PendingFile",
+    object_key: str,
+    sha256: str,
+) -> bool:
+    """Register an uploaded episode in the central backend. Best-effort.
+
+    Reads dataset.json from the episode's parent directory to get the
+    backend_dataset_id. Posts to /api/v1/ego/internal/episode-sync with
+    X-Worker-Secret auth. Returns True on success.
+    """
+    import urllib.request
+    import urllib.error
+
+    if not cfg.url or not cfg.worker_secret:
+        return False
+
+    # Determine dataset directory from relative path (format: "dataset_dir/file.egorec")
+    parts = pending.rel_path.split("/")
+    if len(parts) < 2:
+        log.debug("sync_central: cannot extract dataset dir from '%s'", pending.rel_path)
+        return False
+
+    dataset_dir_name = parts[0]
+    dataset_dir = episodes_dir / dataset_dir_name
+    dataset_json = dataset_dir / "dataset.json"
+
+    backend_dataset_id = None
+    ep_metadata: dict = {}
+
+    if dataset_json.exists():
+        try:
+            with open(dataset_json) as f:
+                ds_meta = json.load(f)
+            backend_dataset_id = ds_meta.get("backendDatasetId") or ds_meta.get("backend_dataset_id")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if not backend_dataset_id:
+        log.debug("sync_central: no backend_dataset_id for '%s', skipping", dataset_dir_name)
+        return False
+
+    # Try to read .egorec header for metadata
+    try:
+        from egorec_header import read_metadata
+        meta = read_metadata(pending.abs_path)
+        ep_metadata = meta.to_episode_dict()
+    except Exception:
+        pass
+
+    payload = json.dumps({
+        "dataset_id": backend_dataset_id,
+        "filename": pending.rel_path,
+        "session_name": ep_metadata.get("session_name"),
+        "status": "uploaded",
+        "frame_count": ep_metadata.get("frame_count", 0),
+        "duration_s": ep_metadata.get("duration_s", 0.0),
+        "resolution_w": ep_metadata.get("resolution_w"),
+        "resolution_h": ep_metadata.get("resolution_h"),
+        "fps": ep_metadata.get("fps"),
+        "file_size_bytes": pending.size_bytes,
+        "sha256": sha256,
+        "s3_key": object_key,
+        "camera_serial": ep_metadata.get("camera_serial"),
+        "has_depth": ep_metadata.get("has_depth", True),
+        "has_imu": ep_metadata.get("has_imu", False),
+    }).encode()
+
+    url = f"{cfg.url.rstrip('/')}/api/v1/ego/internal/episode-sync"
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Worker-Secret": cfg.worker_secret,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            result = json.loads(resp.read())
+            log.info(
+                "Central API: episode synced — %s -> %s",
+                pending.rel_path, result.get("status", "ok"),
+            )
+            return True
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        log.warning("Central API sync failed for %s (non-fatal): %s", pending.rel_path, e)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -977,6 +1092,12 @@ def upload_loop(cfg: AppConfig, *, once: bool = False, dataset_filter: Optional[
                 # Notify facility of upload completion
                 if facility and episode_id:
                     facility.complete_episode(episode_id, checksum, pf.size_bytes)
+
+                # Register episode in central backend DB
+                if cfg.central.url and cfg.central.worker_secret:
+                    sync_episode_to_central(
+                        cfg.central, episodes_dir, pf, object_key, checksum,
+                    )
 
                 # Verified delete: confirm the object exists on R2 before deleting locally
                 if cfg.upload.delete_after_upload:
