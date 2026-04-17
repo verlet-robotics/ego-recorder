@@ -139,6 +139,50 @@ void RealSensePipeline::stop()
     }
 }
 
+void RealSensePipeline::hardware_reset_all()
+{
+    // Reset every connected RealSense device. This is the software equivalent
+    // of unplugging and re-plugging the USB cable -- it clears all firmware
+    // state and forces the device to re-enumerate on the bus.
+    rs2::context ctx;
+    auto devices = ctx.query_devices();
+    for (auto&& dev : devices) {
+        try {
+            fprintf(stderr, "[pipeline] Hardware-resetting device: %s\n",
+                    dev.get_info(RS2_CAMERA_INFO_SERIAL_NUMBER));
+            dev.hardware_reset();
+        } catch (const rs2::error& e) {
+            fprintf(stderr, "[pipeline] hardware_reset failed: %s\n", e.what());
+        }
+    }
+}
+
+float RealSensePipeline::asic_temperature() const
+{
+    try {
+        auto depth_sensor = device_.first<rs2::depth_sensor>();
+        if (depth_sensor.supports(RS2_OPTION_ASIC_TEMPERATURE)) {
+            return depth_sensor.get_option(RS2_OPTION_ASIC_TEMPERATURE);
+        }
+    } catch (const rs2::error&) {
+        // Device may be gone
+    }
+    return -1.0f;
+}
+
+void RealSensePipeline::set_laser_power(float power)
+{
+    try {
+        auto depth_sensor = device_.first<rs2::depth_sensor>();
+        if (depth_sensor.supports(RS2_OPTION_LASER_POWER)) {
+            depth_sensor.set_option(RS2_OPTION_LASER_POWER, power);
+            fprintf(stderr, "[pipeline] Laser power set to %.0f\n", power);
+        }
+    } catch (const rs2::error& e) {
+        fprintf(stderr, "[pipeline] Failed to set laser power: %s\n", e.what());
+    }
+}
+
 std::optional<CapturedFrame> RealSensePipeline::poll_frame(unsigned int timeout_ms)
 {
     // Wait with a short timeout so the caller can check is_device_lost()

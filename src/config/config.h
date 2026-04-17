@@ -23,6 +23,9 @@ struct Config {
     // [camera]
     int frame_width  = 848;   ///< Capture resolution width  (must be multiple of 8)
     int frame_height = 480;   ///< Capture resolution height (must be multiple of 8)
+    int laser_power  = -1;    ///< Laser power 0-360 (-1 = use camera default 360).
+                              ///< Reducing to ~150 cuts heat output significantly,
+                              ///< improving long-run stability at the cost of depth range.
 
     // [recording]
     int      queue_size    = 8;    ///< Bounded capture queue depth (2-16)

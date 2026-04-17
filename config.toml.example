@@ -35,6 +35,20 @@ jpeg_quality = 90
 zstd_level = 1
 
 # ---------------------------------------------------------------------------
+# [camera] -- Camera hardware settings
+# ---------------------------------------------------------------------------
+[camera]
+
+# Laser projector power (0-360).
+# Default: -1  (use camera default, which is 360 = full power)
+# Reducing to ~150 significantly cuts heat output, improving long-run
+# thermal stability. The D435 can overheat and disconnect after hours of
+# continuous operation at full laser power, especially in enclosed spaces.
+# Trade-off: lower laser power reduces depth range and quality.
+# Tip: attach an aluminum heatsink to the camera body for best results.
+laser_power = -1
+
+# ---------------------------------------------------------------------------
 # [recording] -- Capture pipeline settings
 # ---------------------------------------------------------------------------
 [recording]

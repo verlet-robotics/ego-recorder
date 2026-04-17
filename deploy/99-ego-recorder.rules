@@ -10,12 +10,26 @@
 # The install script copies the full upstream rules file and supplements it with
 # the ATTR{power/control}="on" lines below. Do not replicate the full list manually.
 
-# RealSense D435 (0x0b07) -- grant group access, disable USB autosuspend
+# RealSense D435 (0x0b07) -- grant group access, fully disable USB autosuspend
+# power/control="on" prevents runtime PM, autosuspend=-1 disables the suspend timer,
+# autosuspend_delay_ms=-1 is the kernel 4.15+ equivalent. Belt-and-suspenders because
+# the D435 does not recover gracefully from USB suspend states.
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b07", \
     MODE:="0660", GROUP:="plugdev", \
-    ATTR{power/control}="on"
+    ATTR{power/control}="on", \
+    ATTR{power/autosuspend}="-1", \
+    ATTR{power/autosuspend_delay_ms}="-1"
 
-# RealSense D435i (0x0b3a) -- grant group access, disable USB autosuspend
+# RealSense D435i (0x0b3a) -- grant group access, fully disable USB autosuspend
 SUBSYSTEMS=="usb", ATTRS{idVendor}=="8086", ATTRS{idProduct}=="0b3a", \
     MODE:="0660", GROUP:="plugdev", \
-    ATTR{power/control}="on"
+    ATTR{power/control}="on", \
+    ATTR{power/autosuspend}="-1", \
+    ATTR{power/autosuspend_delay_ms}="-1"
+
+# Disable autosuspend on USB3 root hubs (vendor 1d6b = Linux Foundation).
+# The D435 can appear to disconnect if its parent hub is suspended, even when
+# the device-level autosuspend is disabled.
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="1d6b", ATTRS{idProduct}=="0003", \
+    ATTR{power/control}="on", \
+    ATTR{power/autosuspend}="-1"

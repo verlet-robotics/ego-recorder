@@ -561,6 +561,12 @@ static int run_preview(int argc, char* argv[]) {
         // Handle camera disconnect recovery
         if (camera_disconnected.load(std::memory_order_acquire)) {
             try {
+                // Hardware-reset all connected devices before re-opening.
+                // This clears stale firmware state that causes silent hangs
+                // after long-running sessions.
+                RealSensePipeline::hardware_reset_all();
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+
                 camera = std::make_unique<RealSensePipeline>();
                 camera->configure_and_start(fw, fh, config.warmup_frames);
                 camera_disconnected.store(false, std::memory_order_release);
@@ -986,6 +992,22 @@ int main(int argc, char* argv[]) {
         fprintf(stderr, "Mode: %s\n",
                 config.headless ? "headless" : "GUI");
 
+        // Apply laser power override if configured.
+        // Reducing laser power from the default 360 to ~150 significantly
+        // reduces heat output, improving long-run thermal stability at the
+        // cost of reduced depth range.
+        if (config.laser_power >= 0) {
+            camera->set_laser_power(static_cast<float>(config.laser_power));
+        }
+
+        // Log initial ASIC temperature
+        {
+            float temp = camera->asic_temperature();
+            if (temp > 0.0f) {
+                fprintf(stderr, "ASIC temperature: %.0f°C\n", temp);
+            }
+        }
+
         // ---- Compression infrastructure ------------------------------------
         ZdepthCompressor zdepth_comp(fw, fh);
         H264Encoder h264(fw, fh, 30, config.h264_crf, config.h264_preset);
@@ -1166,9 +1188,12 @@ int main(int argc, char* argv[]) {
                     stop_recording();
                 }
 
-                // Destroy current pipeline object
+                // Destroy current pipeline and hardware-reset all devices.
+                // This clears stale firmware/USB state that accumulates during
+                // long sessions and prevents the D435 from reconnecting.
                 camera.reset();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                RealSensePipeline::hardware_reset_all();
+                std::this_thread::sleep_for(std::chrono::seconds(3));
 
                 // Recreate pipeline -- retry until camera comes back
                 bool reconnected = false;
@@ -1411,7 +1436,18 @@ int main(int argc, char* argv[]) {
             if (config.headless) {
                 static int stat_counter = 0;
                 if (++stat_counter % 20 == 0) {  // Every ~2s (20 * 100ms tick)
-                    fprintf(stderr, "\r%s", stats.summary().c_str());
+                    // Include ASIC temperature in periodic stats for thermal monitoring.
+                    // Temperatures above 55C indicate the camera needs better cooling
+                    // (heatsink, airflow). Above 60C the laser protection may trigger
+                    // disconnects.
+                    float temp = camera ? camera->asic_temperature() : -1.0f;
+                    if (temp > 0.0f) {
+                        fprintf(stderr, "\r%s | ASIC %.0f°C%s",
+                                stats.summary().c_str(), temp,
+                                temp > 55.0f ? " [HOT]" : "");
+                    } else {
+                        fprintf(stderr, "\r%s", stats.summary().c_str());
+                    }
                     fflush(stderr);
                 }
 
@@ -1479,11 +1515,22 @@ int main(int argc, char* argv[]) {
                         fprintf(stderr, "[headless] Waiting for camera...\n");
                     }
 
-                    // Try to create a new camera
+                    // Try to create a new camera.
+                    // Hardware-reset all devices first to clear stale firmware state
+                    // from the previous session. Without this, long-running D435 cameras
+                    // often fail to reconnect due to accumulated USB/firmware issues.
                     try {
+                        RealSensePipeline::hardware_reset_all();
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
+
                         camera = std::make_unique<RealSensePipeline>();
                         camera->configure_and_start(config.frame_width, config.frame_height,
                                             config.warmup_frames);
+
+                        // Re-apply laser power override after reconnection
+                        if (config.laser_power >= 0) {
+                            camera->set_laser_power(static_cast<float>(config.laser_power));
+                        }
 
                         // Spawn new capture thread (old zombie exits on gen check)
                         int new_gen = capture_generation.fetch_add(1,

@@ -6,7 +6,19 @@ After=local-fs.target
 Type=notify
 User=ego-recorder
 Group=ego-recorder
+
+# Reset the xHCI USB controller before starting to clear stale device state.
+# This is critical for long-running D435 cameras: after a crash or unclean
+# shutdown, the USB controller can hold phantom device handles that prevent
+# the camera from re-enumerating. The reset is equivalent to physically
+# unplugging and re-plugging all USB devices on the controller.
+#
+# The PCI address (0000:00:14.0) is the common Intel xHCI location.
+# If your system uses a different address, update it or replace with:
+#   ExecStartPre=/bin/bash -c 'for d in /sys/bus/pci/drivers/xhci_hcd/0000:*; do echo -n "$(basename $d)" | tee /sys/bus/pci/drivers/xhci_hcd/unbind; sleep 1; echo -n "$(basename $d)" | tee /sys/bus/pci/drivers/xhci_hcd/bind; done'
+ExecStartPre=/bin/bash -c 'XHCI=$(ls -d /sys/bus/pci/drivers/xhci_hcd/0000:* 2>/dev/null | head -1 | xargs -r basename); [ -n "$XHCI" ] && echo -n "$XHCI" | tee /sys/bus/pci/drivers/xhci_hcd/unbind && sleep 2 && echo -n "$XHCI" | tee /sys/bus/pci/drivers/xhci_hcd/bind && sleep 3 || true'
 ExecStart=/usr/local/bin/ego-recorder --headless --config /etc/ego-recorder/config.toml
+
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s

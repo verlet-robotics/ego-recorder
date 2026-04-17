@@ -41,6 +41,7 @@ Config load_config(const std::string& path) {
     // [camera]
     cfg.frame_width  = tbl["camera"]["width"].value_or(cfg.frame_width);
     cfg.frame_height = tbl["camera"]["height"].value_or(cfg.frame_height);
+    cfg.laser_power  = tbl["camera"]["laser_power"].value_or(cfg.laser_power);
 
     // [recording]
     cfg.queue_size    = tbl["recording"]["queue_size"].value_or(cfg.queue_size);

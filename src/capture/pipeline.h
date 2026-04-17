@@ -60,6 +60,20 @@ public:
     /// Stop the pipeline and release the device.
     void stop();
 
+    /// Issue a hardware reset (equivalent to USB unplug/replug).
+    /// Clears all internal device state. After calling this, the device will
+    /// re-enumerate on the USB bus -- wait ~5 seconds before calling
+    /// configure_and_start() again.
+    static void hardware_reset_all();
+
+    /// Read the ASIC temperature in degrees Celsius.
+    /// Returns -1.0f if the sensor does not support temperature readout.
+    float asic_temperature() const;
+
+    /// Set the laser power (0-360, default 360).
+    /// Reducing laser power reduces heat output at the cost of depth range/quality.
+    void set_laser_power(float power);
+
     /// Wait up to \p timeout_ms for the next frameset, copy data into a
     /// CapturedFrame, and return it. Returns std::nullopt on timeout (no frame
     /// available), allowing the caller to check is_device_lost() promptly.
