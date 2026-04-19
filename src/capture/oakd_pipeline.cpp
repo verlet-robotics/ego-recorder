@@ -95,6 +95,10 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         //    the graph is fully wired so firmware upload happens once.
         // -----------------------------------------------------------------
         device_ = std::make_shared<dai::Device>();
+        // DepthAI v3 relays device logs through stdout, which corrupts the
+        // preview subprocess's tagged-frame protocol with the Tauri app.
+        // Raise the device log level so only CRITICAL messages leak through.
+        device_->setLogLevel(dai::LogLevel::CRITICAL);
         device_->setMaxReconnectionAttempts(10);
         pipeline_ = std::make_unique<dai::Pipeline>(device_);
         auto& pipeline = *pipeline_;
