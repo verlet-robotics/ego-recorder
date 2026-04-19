@@ -6,6 +6,58 @@
 #include <optional>
 #include <stdexcept>
 
+// ---- Intrinsics/extrinsics conversion helpers (rs2 -> camera-agnostic) ------
+
+static CameraIntrinsics convert_intrinsics(const rs2_intrinsics& rs) {
+    CameraIntrinsics ci{};
+    ci.width  = rs.width;
+    ci.height = rs.height;
+    ci.fx     = rs.fx;
+    ci.fy     = rs.fy;
+    ci.ppx    = rs.ppx;
+    ci.ppy    = rs.ppy;
+    ci.distortion_model = static_cast<uint32_t>(rs.model);
+    static_assert(sizeof(ci.distortion_coeffs) == sizeof(rs.coeffs),
+                  "distortion coefficient array size mismatch");
+    std::memcpy(ci.distortion_coeffs, rs.coeffs, sizeof(ci.distortion_coeffs));
+    return ci;
+}
+
+static CameraExtrinsics convert_extrinsics(const rs2_extrinsics& rs) {
+    CameraExtrinsics ce{};
+    static_assert(sizeof(ce.rotation) == sizeof(rs.rotation),
+                  "extrinsic rotation array size mismatch");
+    static_assert(sizeof(ce.translation) == sizeof(rs.translation),
+                  "extrinsic translation array size mismatch");
+    std::memcpy(ce.rotation, rs.rotation, sizeof(ce.rotation));
+    std::memcpy(ce.translation, rs.translation, sizeof(ce.translation));
+    return ce;
+}
+
+// ---- ICameraPipeline accessors (convert from internal rs2 types) -----------
+
+CameraIntrinsics RealSensePipeline::depth_intrinsics() const {
+    return convert_intrinsics(depth_intrinsics_);
+}
+
+CameraIntrinsics RealSensePipeline::color_intrinsics() const {
+    return convert_intrinsics(color_intrinsics_);
+}
+
+CameraExtrinsics RealSensePipeline::depth_to_color_extrinsics() const {
+    return convert_extrinsics(depth_to_color_extrinsics_);
+}
+
+// ---- RealSense-specific methods -------------------------------------------
+
+void RealSensePipeline::hardware_reset() {
+    try {
+        device_.hardware_reset();
+    } catch (const rs2::error&) {}
+}
+
+// ---- configure_and_start ---------------------------------------------------
+
 void RealSensePipeline::configure_and_start(int width, int height, int warmup_frames)
 {
     // -------------------------------------------------------------------------
@@ -35,7 +87,12 @@ void RealSensePipeline::configure_and_start(int width, int height, int warmup_fr
         rs2::config cfg_no_imu;
         cfg_no_imu.enable_stream(RS2_STREAM_COLOR, width, height, RS2_FORMAT_RGB8, 30);
         cfg_no_imu.enable_stream(RS2_STREAM_DEPTH, width, height, RS2_FORMAT_Z16,  30);
-        profile_ = pipe_.start(cfg_no_imu);
+        try {
+            profile_ = pipe_.start(cfg_no_imu);
+        } catch (const rs2::error& e2) {
+            throw std::runtime_error(
+                std::string("RealSense: failed to start pipeline: ") + e2.what());
+        }
         has_imu_ = false;
         fprintf(stderr, "No IMU detected (D435 mode)\n");
     }
@@ -188,8 +245,13 @@ std::optional<CapturedFrame> RealSensePipeline::poll_frame(unsigned int timeout_
     // Wait with a short timeout so the caller can check is_device_lost()
     // promptly after a USB unplug, rather than blocking for 15 seconds.
     rs2::frameset frames;
-    if (!pipe_.try_wait_for_frames(&frames, timeout_ms)) {
-        return std::nullopt;  // No frame within timeout -- let caller re-check
+    try {
+        if (!pipe_.try_wait_for_frames(&frames, timeout_ms)) {
+            return std::nullopt;  // No frame within timeout -- let caller re-check
+        }
+    } catch (const rs2::error& e) {
+        throw std::runtime_error(
+            std::string("RealSense: frame polling failed: ") + e.what());
     }
 
     // Extract color and depth frames from the synchronized set.

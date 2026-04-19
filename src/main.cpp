@@ -1,4 +1,8 @@
-// ego-recorder: synchronized RGBD capture from Intel RealSense D435/D435i.
+// ego-recorder: synchronized RGBD capture from depth cameras.
+//
+// Supported cameras: Intel RealSense D435/D435i, Luxonis OAK-D Wide.
+// Camera backend is selected via --camera-type CLI flag or [camera] type
+// in the TOML config file.
 //
 // Supports two modes selected via --headless flag:
 //
@@ -8,8 +12,8 @@
 //     overlay. Recording starts only when the user clicks "Start Recording".
 //
 //   Headless mode (--headless):
-//     Designed for unattended systemd service operation. Waits for a RealSense
-//     camera to appear (hotplug), plays a 3-second audio countdown, then starts
+//     Designed for unattended systemd service operation. Waits for a camera
+//     to appear (hotplug), plays a 3-second audio countdown, then starts
 //     recording with an auto-generated timestamp session name. Integrates with
 //     systemd sd_notify (READY, WATCHDOG, STATUS, STOPPING) and the D-Bus
 //     inhibitor lock to block lid-close during recording.
@@ -40,7 +44,8 @@
 #include <csignal>
 #include <cxxopts.hpp>
 
-#include "capture/pipeline.h"
+#include "capture/icamera_pipeline.h"
+#include "capture/camera_factory.h"
 #include "capture/frame_types.h"
 #include "threading/bounded_queue.h"
 #include "compression/jpeg_compressor.h"
@@ -84,7 +89,9 @@
 
 #include <unistd.h>
 
-#include <librealsense2/rs.hpp>
+// Note: rs2 headers are no longer needed here -- all camera access goes
+// through the ICameraPipeline interface. SDK-specific exceptions are wrapped
+// in std::runtime_error by each backend implementation.
 
 // ---- Helpers ---------------------------------------------------------------
 
@@ -187,7 +194,8 @@ static uint64_t now_us() {
 
 /// Assemble a FileHeader from pipeline metadata + config.
 /// The header is fully populated -- caller just needs to call write_header().
-static FileHeader make_file_header(const RealSensePipeline& camera,
+/// Uses the camera-agnostic ICameraPipeline interface so any backend works.
+static FileHeader make_file_header(const ICameraPipeline& camera,
                                    const std::string& session_name,
                                    int crf) {
     FileHeader header;
@@ -202,33 +210,33 @@ static FileHeader make_file_header(const RealSensePipeline& camera,
 
     header.depth_scale = camera.depth_scale();
 
-    auto di = camera.depth_intrinsics();
+    CameraIntrinsics di = camera.depth_intrinsics();
     header.depth_width  = static_cast<uint32_t>(di.width);
     header.depth_height = static_cast<uint32_t>(di.height);
     header.depth_fx     = di.fx;
     header.depth_fy     = di.fy;
     header.depth_ppx    = di.ppx;
     header.depth_ppy    = di.ppy;
-    header.depth_distortion_model = static_cast<uint32_t>(di.model);
-    static_assert(sizeof(header.depth_distortion_coeffs) == sizeof(di.coeffs),
+    header.depth_distortion_model = di.distortion_model;
+    static_assert(sizeof(header.depth_distortion_coeffs) == sizeof(di.distortion_coeffs),
                   "depth distortion coefficients array size mismatch");
-    std::memcpy(header.depth_distortion_coeffs, di.coeffs,
+    std::memcpy(header.depth_distortion_coeffs, di.distortion_coeffs,
                 sizeof(header.depth_distortion_coeffs));
 
-    auto ci = camera.color_intrinsics();
+    CameraIntrinsics ci = camera.color_intrinsics();
     header.color_width  = static_cast<uint32_t>(ci.width);
     header.color_height = static_cast<uint32_t>(ci.height);
     header.color_fx     = ci.fx;
     header.color_fy     = ci.fy;
     header.color_ppx    = ci.ppx;
     header.color_ppy    = ci.ppy;
-    header.color_distortion_model = static_cast<uint32_t>(ci.model);
-    static_assert(sizeof(header.color_distortion_coeffs) == sizeof(ci.coeffs),
+    header.color_distortion_model = ci.distortion_model;
+    static_assert(sizeof(header.color_distortion_coeffs) == sizeof(ci.distortion_coeffs),
                   "color distortion coefficients array size mismatch");
-    std::memcpy(header.color_distortion_coeffs, ci.coeffs,
+    std::memcpy(header.color_distortion_coeffs, ci.distortion_coeffs,
                 sizeof(header.color_distortion_coeffs));
 
-    auto ex = camera.depth_to_color_extrinsics();
+    CameraExtrinsics ex = camera.depth_to_color_extrinsics();
     static_assert(sizeof(header.extrinsic_rotation) == sizeof(ex.rotation),
                   "extrinsic rotation array size mismatch");
     static_assert(sizeof(header.extrinsic_translation) == sizeof(ex.translation),
@@ -267,7 +275,7 @@ static int run_preview(int argc, char* argv[]) {
     // Parse optional flags (same as regular mode, but only a subset matter)
     Config config = load_config("");
 
-    // Accept optional --width, --height, --warmup, --crf, --queue-size, --config
+    // Accept optional --width, --height, --warmup, --crf, --queue-size, --config, --camera-type
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         auto next = [&]() -> std::string {
@@ -280,6 +288,7 @@ static int run_preview(int argc, char* argv[]) {
         else if (arg == "--crf")    { config.h264_crf = std::stoi(next()); }
         else if (arg == "--preset") { config.h264_preset = next(); }
         else if (arg == "--queue-size") { config.queue_size = std::stoi(next()); }
+        else if (arg == "--camera-type") { config.camera_type = next(); }
     }
 
     const int fw = config.frame_width;
@@ -290,14 +299,15 @@ static int run_preview(int argc, char* argv[]) {
     setup_signal_handling(shutdown_flag);
 
     // Camera initialization (poll until available)
-    std::unique_ptr<RealSensePipeline> camera;
-    fprintf(stderr, "[preview] Waiting for RealSense camera...\n");
+    CameraType cam_type = parse_camera_type(config.camera_type);
+    std::unique_ptr<ICameraPipeline> camera;
+    fprintf(stderr, "[preview] Waiting for camera...\n");
     while (!shutdown_flag.load(std::memory_order_acquire)) {
         try {
-            camera = std::make_unique<RealSensePipeline>();
+            camera = create_camera(cam_type);
             camera->configure_and_start(fw, fh, config.warmup_frames);
             break;
-        } catch (const rs2::error&) {
+        } catch (const std::runtime_error&) {
             camera.reset();
             for (int ms = 0; ms < 2000 && !shutdown_flag.load(); ms += 100) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -515,8 +525,8 @@ static int run_preview(int argc, char* argv[]) {
                 if (recording_active.load(std::memory_order_acquire) && queue) {
                     queue->push(std::move(frame));
                 }
-            } catch (const rs2::error& e) {
-                fprintf(stderr, "\n[preview] RealSense error: %s\n", e.what());
+            } catch (const std::runtime_error& e) {
+                fprintf(stderr, "\n[preview] Camera error: %s\n", e.what());
                 camera_disconnected.store(true, std::memory_order_release);
                 preview->on_camera_disconnect();
                 if (recording_active.load(std::memory_order_acquire)) {
@@ -560,19 +570,20 @@ static int run_preview(int argc, char* argv[]) {
 
         // Handle camera disconnect recovery
         if (camera_disconnected.load(std::memory_order_acquire)) {
-            try {
-                // Hardware-reset all connected devices before re-opening.
-                // This clears stale firmware state that causes silent hangs
-                // after long-running sessions.
-                RealSensePipeline::hardware_reset_all();
-                std::this_thread::sleep_for(std::chrono::seconds(3));
+            // Hardware-reset ALL connected devices to clear stale USB/firmware
+            // state that causes silent hangs on RealSense D435. Uses a fresh
+            // context so it works even if the device object is dead.
+            camera.reset();
+            reset_all_cameras(cam_type);
+            std::this_thread::sleep_for(std::chrono::seconds(3));
 
-                camera = std::make_unique<RealSensePipeline>();
+            try {
+                camera = create_camera(cam_type);
                 camera->configure_and_start(fw, fh, config.warmup_frames);
                 camera_disconnected.store(false, std::memory_order_release);
                 preview->on_camera_reconnect();
                 fprintf(stderr, "[preview] Camera reconnected.\n");
-            } catch (const rs2::error&) {
+            } catch (const std::runtime_error&) {
                 camera.reset();
                 // Retry next tick
             }
@@ -788,12 +799,14 @@ int main(int argc, char* argv[]) {
 
     // ---- CLI Parsing -------------------------------------------------------
     cxxopts::Options options("ego-recorder",
-        "Record synchronized RGBD data from Intel RealSense D435/D435i to .egorec files");
+        "Record synchronized RGBD data from depth cameras to .egorec files");
 
     options.add_options()
         ("headless",       "Run in headless/systemd mode (no GUI, auto-record)",
          cxxopts::value<bool>()->default_value("false"))
         ("config",         "Path to TOML configuration file",
+         cxxopts::value<std::string>()->default_value(""))
+        ("camera-type",    "Camera backend: realsense or oakd (default: from config or realsense)",
          cxxopts::value<std::string>()->default_value(""))
         ("o,output",       "Output directory",
          cxxopts::value<std::string>()->default_value("."))
@@ -871,9 +884,16 @@ int main(int argc, char* argv[]) {
     if (args.count("height") && args["height"].as<int>() != 0) {
         config.frame_height = args["height"].as<int>();
     }
+    if (args.count("camera-type")) {
+        auto ct = args["camera-type"].as<std::string>();
+        if (!ct.empty()) config.camera_type = ct;
+    }
 
     // Duration: CLI flag only (not in config struct)
     const int max_duration = args["duration"].as<int>();
+
+    // Parse camera type from config (CLI override already applied above)
+    CameraType cam_type = parse_camera_type(config.camera_type);
 
     // Validate ranges (post-merge)
     if (config.h264_crf < 0 || config.h264_crf > 51) {
@@ -949,24 +969,24 @@ int main(int argc, char* argv[]) {
     // Zombie storage: old capture threads/cameras that are stuck inside
     // librealsense's 15-second internal timeout. Kept alive until shutdown.
     std::vector<std::thread>                         zombie_threads;
-    std::vector<std::unique_ptr<RealSensePipeline>>  zombie_cameras;
+    std::vector<std::unique_ptr<ICameraPipeline>>  zombie_cameras;
 
     // ---- Outer try/catch ---------------------------------------------------
     try {
         // ---- Camera initialization -----------------------------------------
-        std::unique_ptr<RealSensePipeline> camera;
+        std::unique_ptr<ICameraPipeline> camera;
 
         if (config.headless) {
             // Headless: poll for camera availability (supports hotplug --
             // the camera may not be connected when the service starts).
-            fprintf(stderr, "[headless] Waiting for RealSense camera...\n");
+            fprintf(stderr, "[headless] Waiting for camera...\n");
             while (!shutdown_flag.load(std::memory_order_acquire)) {
                 try {
-                    camera = std::make_unique<RealSensePipeline>();
+                    camera = create_camera(cam_type);
                     camera->configure_and_start(config.frame_width, config.frame_height,
                                             config.warmup_frames);
                     break;
-                } catch (const rs2::error&) {
+                } catch (const std::runtime_error&) {
                     camera.reset();
                     for (int ms = 0; ms < 2000 && !shutdown_flag.load(); ms += 100) {
                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -975,13 +995,18 @@ int main(int argc, char* argv[]) {
             }
             if (shutdown_flag.load()) return 0;
         } else {
-            camera = std::make_unique<RealSensePipeline>();
+            camera = create_camera(cam_type);
             camera->configure_and_start(config.frame_width, config.frame_height,
                                         config.warmup_frames);
         }
 
         const int fw = config.frame_width;
         const int fh = config.frame_height;
+
+        // Apply laser power override (RealSense only; no-op for OAK-D)
+        if (config.laser_power >= 0) {
+            camera->set_laser_power(static_cast<float>(config.laser_power));
+        }
 
         fprintf(stderr, "Camera: %s (USB %s)\n",
                 camera->serial_number().c_str(),
@@ -1191,20 +1216,21 @@ int main(int argc, char* argv[]) {
                 // Destroy current pipeline and hardware-reset all devices.
                 // This clears stale firmware/USB state that accumulates during
                 // long sessions and prevents the D435 from reconnecting.
+                // No-op for OAK-D (DepthAI handles reconnection internally).
                 camera.reset();
-                RealSensePipeline::hardware_reset_all();
+                reset_all_cameras(cam_type);
                 std::this_thread::sleep_for(std::chrono::seconds(3));
 
                 // Recreate pipeline -- retry until camera comes back
                 bool reconnected = false;
                 for (int attempt = 0; attempt < 30 && !shutdown_flag.load(); ++attempt) {
                     try {
-                        camera = std::make_unique<RealSensePipeline>();
+                        camera = create_camera(cam_type);
                         camera->configure_and_start(config.frame_width, config.frame_height,
                                             config.warmup_frames);
                         reconnected = true;
                         break;
-                    } catch (const rs2::error& e) {
+                    } catch (const std::runtime_error& e) {
                         fprintf(stderr, "[gui] Reconnect attempt %d failed: %s\n",
                                 attempt + 1, e.what());
                         camera.reset();
@@ -1393,9 +1419,9 @@ int main(int argc, char* argv[]) {
                             stats.elapsed_seconds() >= static_cast<double>(max_duration)) {
                             shutdown_flag.store(true, std::memory_order_release);
                         }
-                    } catch (const rs2::error& e) {
+                    } catch (const std::runtime_error& e) {
                         if (capture_generation.load(std::memory_order_acquire) != gen) break;
-                        fprintf(stderr, "\n[capture] RealSense error: %s\n", e.what());
+                        fprintf(stderr, "\n[capture] Camera error: %s\n", e.what());
                         if (!handle_disconnect()) break;
                     }
                 }
@@ -1512,6 +1538,9 @@ int main(int argc, char* argv[]) {
                         if (camera) camera->stop();
                         zombie_cameras.push_back(std::move(camera));
                         zombie_threads.push_back(std::move(capture_thread));
+                        // Hardware-reset ALL devices to clear stale USB/firmware state
+                        reset_all_cameras(cam_type);
+                        std::this_thread::sleep_for(std::chrono::seconds(3));
                         fprintf(stderr, "[headless] Waiting for camera...\n");
                     }
 
@@ -1520,10 +1549,7 @@ int main(int argc, char* argv[]) {
                     // from the previous session. Without this, long-running D435 cameras
                     // often fail to reconnect due to accumulated USB/firmware issues.
                     try {
-                        RealSensePipeline::hardware_reset_all();
-                        std::this_thread::sleep_for(std::chrono::seconds(3));
-
-                        camera = std::make_unique<RealSensePipeline>();
+                        camera = create_camera(cam_type);
                         camera->configure_and_start(config.frame_width, config.frame_height,
                                             config.warmup_frames);
 
@@ -1552,7 +1578,7 @@ int main(int argc, char* argv[]) {
                         }
                         start_recording(session_name, output_dir,
                                         /*add_timestamp_suffix=*/false);
-                    } catch (const rs2::error&) {
+                    } catch (const std::runtime_error&) {
                         // Camera not available yet, retry next tick (~100ms)
                         camera.reset();
                     }
@@ -1587,9 +1613,6 @@ int main(int argc, char* argv[]) {
 
         return 0;
 
-    } catch (const rs2::error& e) {
-        fprintf(stderr, "\nRealSense error: %s\n", e.what());
-        return 1;
     } catch (const std::exception& e) {
         fprintf(stderr, "\nError: %s\n", e.what());
         return 1;

@@ -42,13 +42,32 @@ if(DEFINED REALSENSE2_CMAKE_PREFIX)
     list(PREPEND CMAKE_PREFIX_PATH "${REALSENSE2_CMAKE_PREFIX}")
 endif()
 
+# ---- Camera backend options ----
+
+option(WITH_REALSENSE "Build with Intel RealSense support" ON)
+option(WITH_DEPTHAI "Build with Luxonis DepthAI (OAK-D) support" OFF)
+
+if(NOT WITH_REALSENSE AND NOT WITH_DEPTHAI)
+    message(FATAL_ERROR "At least one camera backend must be enabled (WITH_REALSENSE or WITH_DEPTHAI)")
+endif()
+
 # ---- Dependencies ----
 
-# librealsense2 (typically from ROS or system install)
-# realsense2's DDS support requires fastcdr/fastrtps targets to exist first
-find_package(fastcdr QUIET)
-find_package(fastrtps QUIET)
-find_package(realsense2 REQUIRED)
+# librealsense2 (conditional)
+if(WITH_REALSENSE)
+    find_package(fastcdr QUIET)
+    find_package(fastrtps QUIET)
+    find_package(realsense2 REQUIRED)
+    add_compile_definitions(HAVE_REALSENSE)
+    message(STATUS "Camera backend: RealSense enabled")
+endif()
+
+# DepthAI / OAK-D (conditional)
+if(WITH_DEPTHAI)
+    find_package(depthai CONFIG REQUIRED)
+    add_compile_definitions(HAVE_DEPTHAI)
+    message(STATUS "Camera backend: DepthAI (OAK-D) enabled")
+endif()
 
 # PkgConfig for turbojpeg and zstd
 find_package(PkgConfig REQUIRED)
@@ -208,7 +227,7 @@ endif()
 
 add_executable(ego-recorder
     src/main.cpp
-    src/capture/pipeline.cpp
+    src/capture/camera_factory.cpp
     src/compression/jpeg_compressor.cpp
     src/compression/zstd_compressor.cpp
     src/compression/zdepth_compressor.cpp
@@ -225,6 +244,14 @@ add_executable(ego-recorder
     src/presenter/preview_presenter.cpp
 )
 
+# Conditional camera backend sources
+if(WITH_REALSENSE)
+    target_sources(ego-recorder PRIVATE src/capture/pipeline.cpp)
+endif()
+if(WITH_DEPTHAI)
+    target_sources(ego-recorder PRIVATE src/capture/oakd_pipeline.cpp)
+endif()
+
 # gui_presenter.cpp is only compiled when WITH_GUI=ON (added in plan 02-02)
 if(WITH_GUI)
     target_sources(ego-recorder PRIVATE src/presenter/gui_presenter.cpp)
@@ -233,7 +260,6 @@ endif()
 target_include_directories(ego-recorder PRIVATE src)
 
 target_link_libraries(ego-recorder PRIVATE
-    realsense2::realsense2
     PkgConfig::TURBOJPEG
     PkgConfig::ZSTD
     zdepth
@@ -245,6 +271,14 @@ target_link_libraries(ego-recorder PRIVATE
     nlohmann_json::nlohmann_json
     pthread
 )
+
+# Conditional camera backend linking
+if(WITH_REALSENSE)
+    target_link_libraries(ego-recorder PRIVATE realsense2::realsense2)
+endif()
+if(WITH_DEPTHAI)
+    target_link_libraries(ego-recorder PRIVATE depthai::core)
+endif()
 
 if(WITH_SYSTEMD AND SYSTEMD_FOUND)
     target_link_libraries(ego-recorder PRIVATE PkgConfig::SYSTEMD)

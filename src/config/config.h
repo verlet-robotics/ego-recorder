@@ -21,9 +21,11 @@ struct Config {
     std::string h264_preset = "ultrafast";  ///< x264 preset (ultrafast/superfast/veryfast/fast)
 
     // [camera]
+    std::string camera_type = "realsense";  ///< Camera backend: "realsense" or "oakd"
     int frame_width  = 848;   ///< Capture resolution width  (must be multiple of 8)
     int frame_height = 480;   ///< Capture resolution height (must be multiple of 8)
     int laser_power  = -1;    ///< Laser power 0-360 (-1 = use camera default 360).
+                              ///< RealSense only; ignored for OAK-D.
                               ///< Reducing to ~150 cuts heat output significantly,
                               ///< improving long-run stability at the cost of depth range.
 

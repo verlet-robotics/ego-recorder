@@ -39,8 +39,26 @@ zstd_level = 1
 # ---------------------------------------------------------------------------
 [camera]
 
-# Laser projector power (0-360).
-# Default: -1  (use camera default, which is 360 = full power)
+# Camera backend to use.
+# Supported values:
+#   "realsense" -- Intel RealSense D435/D435i (default)
+#   "oakd"      -- Luxonis OAK-D / OAK-D Wide / OAK-D Pro Wide
+# Can be overridden with --camera-type CLI flag.
+# Default: "realsense"
+type = "realsense"
+
+# Capture resolution width (must be multiple of 8).
+# Default: 848 (RealSense); for OAK-D Wide, 1280 is recommended.
+# Note: OAK-D snaps height to 4:3 aspect to preserve full wide-angle FOV
+# (e.g. 1280 -> 1280x960 instead of 1280x720).
+# width = 848
+
+# Capture resolution height (must be multiple of 8).
+# For OAK-D Wide, this is auto-adjusted to 4:3 aspect to preserve full FOV.
+# height = 480
+
+# Laser projector power (RealSense only; ignored for OAK-D).
+# Range: 0 (off) to 360 (full power). -1 = use camera default (360).
 # Reducing to ~150 significantly cuts heat output, improving long-run
 # thermal stability. The D435 can overheat and disconnect after hours of
 # continuous operation at full laser power, especially in enclosed spaces.

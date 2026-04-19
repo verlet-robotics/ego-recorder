@@ -39,6 +39,7 @@ Config load_config(const std::string& path) {
     cfg.h264_preset  = tbl["compression"]["h264_preset"].value_or(cfg.h264_preset);
 
     // [camera]
+    cfg.camera_type  = tbl["camera"]["type"].value_or(cfg.camera_type);
     cfg.frame_width  = tbl["camera"]["width"].value_or(cfg.frame_width);
     cfg.frame_height = tbl["camera"]["height"].value_or(cfg.frame_height);
     cfg.laser_power  = tbl["camera"]["laser_power"].value_or(cfg.laser_power);

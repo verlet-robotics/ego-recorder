@@ -6,9 +6,12 @@
 #include <string>
 #include <cstdint>
 
+#include "capture/icamera_pipeline.h"
 #include "capture/frame_types.h"
 
 /// RealSense camera pipeline wrapper.
+///
+/// Implements the ICameraPipeline interface for Intel RealSense D435/D435i.
 ///
 /// Handles device initialization, stream configuration, intrinsics/extrinsics
 /// extraction, IMU detection, auto-exposure warmup, and frame polling.
@@ -26,7 +29,7 @@
 ///       // process frame ...
 ///   }
 ///   pipeline.stop();
-class RealSensePipeline {
+class RealSensePipeline : public ICameraPipeline {
 public:
     /// Default constructor -- does nothing. Call configure_and_start() to initialize.
     RealSensePipeline() = default;
@@ -37,7 +40,7 @@ public:
     RealSensePipeline(RealSensePipeline&&) = delete;
     RealSensePipeline& operator=(RealSensePipeline&&) = delete;
 
-    ~RealSensePipeline() = default;
+    ~RealSensePipeline() override = default;
 
     /// Configure and start the RealSense pipeline.
     ///
@@ -55,24 +58,11 @@ public:
     /// @param width          Frame width  (default: 1280, must be supported by D435/D435i)
     /// @param height         Frame height (default: 720)
     /// @param warmup_frames  Number of frames to discard during warmup (default: 30)
-    void configure_and_start(int width = 1280, int height = 720, int warmup_frames = 30);
+    void configure_and_start(int width = 1280, int height = 720,
+                             int warmup_frames = 30) override;
 
     /// Stop the pipeline and release the device.
-    void stop();
-
-    /// Issue a hardware reset (equivalent to USB unplug/replug).
-    /// Clears all internal device state. After calling this, the device will
-    /// re-enumerate on the USB bus -- wait ~5 seconds before calling
-    /// configure_and_start() again.
-    static void hardware_reset_all();
-
-    /// Read the ASIC temperature in degrees Celsius.
-    /// Returns -1.0f if the sensor does not support temperature readout.
-    float asic_temperature() const;
-
-    /// Set the laser power (0-360, default 360).
-    /// Reducing laser power reduces heat output at the cost of depth range/quality.
-    void set_laser_power(float power);
+    void stop() override;
 
     /// Wait up to \p timeout_ms for the next frameset, copy data into a
     /// CapturedFrame, and return it. Returns std::nullopt on timeout (no frame
@@ -80,35 +70,36 @@ public:
     ///
     /// @param timeout_ms  Max wait time in milliseconds (default: 500)
     /// @return CapturedFrame if a frame arrived, std::nullopt on timeout.
-    std::optional<CapturedFrame> poll_frame(unsigned int timeout_ms = 500);
+    std::optional<CapturedFrame> poll_frame(unsigned int timeout_ms = 500) override;
 
-    // ---- Accessors for camera metadata (used by main.cpp to assemble FileHeader) ----
+    // ---- ICameraPipeline accessors (override) ----
 
-    /// Returns true if the device was removed (USB unplug detected via hotplug callback).
-    /// Fires within milliseconds of physical disconnect -- no need to wait for poll_frame()
-    /// to throw. Check this before each poll_frame() call.
-    bool is_device_lost() const { return device_lost_.load(std::memory_order_acquire); }
+    bool is_device_lost() const override {
+        return device_lost_.load(std::memory_order_acquire);
+    }
 
-    /// Returns true if IMU streams were successfully enabled (D435i mode).
-    bool has_imu() const { return has_imu_; }
+    bool has_imu() const override { return has_imu_; }
+    std::string serial_number() const override { return serial_number_; }
+    std::string usb_type() const override { return usb_type_; }
+    float depth_scale() const override { return depth_scale_; }
 
-    /// Camera serial number string (e.g., "012345678901").
-    std::string serial_number() const { return serial_number_; }
+    CameraIntrinsics depth_intrinsics() const override;
+    CameraIntrinsics color_intrinsics() const override;
+    CameraExtrinsics depth_to_color_extrinsics() const override;
 
-    /// USB connection type descriptor (e.g., "3.2", "2.1").
-    std::string usb_type() const { return usb_type_; }
+    // ---- RealSense-specific methods ----
 
-    /// Depth scale: multiply Z16 raw value by this to get meters.
-    float depth_scale() const { return depth_scale_; }
+    /// Set laser power (0.0 = off, 1.0 = max). Only works on D435 with active IR.
+    void set_laser_power(float power) override;
 
-    /// Depth stream intrinsics (focal lengths, principal point, distortion).
-    rs2_intrinsics depth_intrinsics() const { return depth_intrinsics_; }
+    /// Read ASIC temperature in degrees Celsius.
+    float asic_temperature() const override;
 
-    /// Color stream intrinsics.
-    rs2_intrinsics color_intrinsics() const { return color_intrinsics_; }
+    /// Hardware-reset the active device.
+    void hardware_reset() override;
 
-    /// Extrinsics from depth frame coordinate space to color frame coordinate space.
-    rs2_extrinsics depth_to_color_extrinsics() const { return depth_to_color_extrinsics_; }
+    /// Hardware-reset ALL connected RealSense devices (static, not on interface).
+    static void hardware_reset_all();
 
 private:
     rs2::context          ctx_;
