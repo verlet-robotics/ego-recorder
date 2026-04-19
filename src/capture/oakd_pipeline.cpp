@@ -96,7 +96,8 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         // -----------------------------------------------------------------
         device_ = std::make_shared<dai::Device>();
         device_->setMaxReconnectionAttempts(10);
-        dai::Pipeline pipeline(device_);
+        pipeline_ = std::make_unique<dai::Pipeline>(device_);
+        auto& pipeline = *pipeline_;
 
         // Color camera (CAM_A = center RGB)
         auto camRgb = pipeline.create<dai::node::Camera>()->build(
@@ -147,9 +148,12 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         }
 
         // -----------------------------------------------------------------
-        // 2. Boot the pipeline on the device (firmware upload ~2-3 seconds)
+        // 2. Boot the pipeline on the device (firmware upload ~2-3 seconds).
+        //    pipeline.start() is the v3 canonical entry point when the
+        //    Pipeline was constructed with an explicit Device; it wires up
+        //    the host-side queues and kicks off firmware execution.
         // -----------------------------------------------------------------
-        device_->startPipeline(pipeline);
+        pipeline.start();
 
         // -----------------------------------------------------------------
         // 3. Store output queues
@@ -297,9 +301,10 @@ void OakDPipeline::stop() {
     } catch (...) {
         // Device may already be gone (USB unplug)
     }
-    device_.reset();
     sync_queue_.reset();
     imu_queue_.reset();
+    pipeline_.reset();
+    device_.reset();
 }
 
 // ---- poll_frame ------------------------------------------------------------
@@ -387,9 +392,16 @@ std::optional<CapturedFrame> OakDPipeline::poll_frame(unsigned int timeout_ms) {
 }
 
 // ---- is_device_lost --------------------------------------------------------
+//
+// DepthAI v3's Device::isClosed() is explicitly documented as thread-unsafe
+// and "may return outdated incorrect values" — calling it from the capture
+// thread produced spurious hotplug-unplug events. Instead, treat the device
+// as lost only when we've actively closed + released it. Transient USB drops
+// surface as poll_frame() errors and the recorder recovers through its
+// existing reconnect path.
 
 bool OakDPipeline::is_device_lost() const {
-    return !device_ || device_->isClosed();
+    return !device_;
 }
 
 #endif // HAVE_DEPTHAI

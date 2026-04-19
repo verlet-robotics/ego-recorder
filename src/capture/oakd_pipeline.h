@@ -62,6 +62,9 @@ private:
     static std::string usb_speed_to_string(dai::UsbSpeed speed);
 
     std::shared_ptr<dai::Device>       device_;
+    // Pipeline owns the node graph + host-side queues. Must outlive the
+    // queues below — v3 closes the queues when the Pipeline destructs.
+    std::unique_ptr<dai::Pipeline>     pipeline_;
     std::shared_ptr<dai::MessageQueue> sync_queue_;
     std::shared_ptr<dai::MessageQueue> imu_queue_;
 
