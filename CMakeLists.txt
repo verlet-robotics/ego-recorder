@@ -94,14 +94,18 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(tomlplusplus)
 
 # nlohmann/json for dataset manifest (dataset.json read/write)
-FetchContent_Declare(
-    nlohmann_json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG        v3.11.3
-    GIT_SHALLOW    TRUE
-)
-set(JSON_BuildTests OFF CACHE INTERNAL "")
-FetchContent_MakeAvailable(nlohmann_json)
+# Guard: if another dependency (e.g. DepthAI via find_package) already imported
+# nlohmann_json::nlohmann_json, skip FetchContent to avoid a duplicate-target error.
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.11.3
+        GIT_SHALLOW    TRUE
+    )
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
 
 # Zdepth depth compressor via FetchContent
 # CRITICAL: Create a 'zstd' INTERFACE target BEFORE fetching Zdepth so that

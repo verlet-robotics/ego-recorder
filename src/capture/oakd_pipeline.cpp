@@ -88,9 +88,15 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         constexpr int STEREO_H = 400;
 
         // -----------------------------------------------------------------
-        // 1. Build DepthAI pipeline graph
+        // 1. Create the device and a pipeline bound to it.
+        //    DepthAI v3 requires the device to exist before the pipeline
+        //    graph is built; the queues we create from node outputs need a
+        //    real device to attach to. We defer startPipeline() until after
+        //    the graph is fully wired so firmware upload happens once.
         // -----------------------------------------------------------------
-        dai::Pipeline pipeline;
+        device_ = std::make_shared<dai::Device>();
+        device_->setMaxReconnectionAttempts(10);
+        dai::Pipeline pipeline(device_);
 
         // Color camera (CAM_A = center RGB)
         auto camRgb = pipeline.create<dai::node::Camera>()->build(
@@ -126,7 +132,7 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
 
         // IMU (optional — not all OAK-D models have it)
         std::shared_ptr<dai::node::IMU> imu;
-        std::shared_ptr<dai::DataOutputQueue> imuQueue;
+        std::shared_ptr<dai::MessageQueue> imuQueue;
         try {
             imu = pipeline.create<dai::node::IMU>();
             imu->enableIMUSensor(dai::IMUSensor::ACCELEROMETER_RAW, 480);
@@ -141,10 +147,9 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         }
 
         // -----------------------------------------------------------------
-        // 2. Boot device (firmware upload takes ~2-3 seconds)
+        // 2. Boot the pipeline on the device (firmware upload ~2-3 seconds)
         // -----------------------------------------------------------------
-        device_ = std::make_shared<dai::Device>(pipeline);
-        device_->setMaxReconnectionAttempts(10);
+        device_->startPipeline(pipeline);
 
         // -----------------------------------------------------------------
         // 3. Store output queues
@@ -160,7 +165,7 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
         // -----------------------------------------------------------------
         // 4. Device info
         // -----------------------------------------------------------------
-        serial_number_ = device_->getMxId();
+        serial_number_ = device_->getDeviceId();
         usb_type_      = usb_speed_to_string(device_->getUsbSpeed());
 
         if (!usb_type_.empty() && usb_type_[0] == '2') {
@@ -261,9 +266,10 @@ void OakDPipeline::configure_and_start(int width, int height, int warmup_frames)
                     break;
                 }
 
-                auto msg = sync_queue_->tryGet<dai::MessageGroup>(
-                    std::chrono::milliseconds(2000));
-                if (!msg) {
+                bool warmup_timed_out = false;
+                auto msg = sync_queue_->get<dai::MessageGroup>(
+                    std::chrono::milliseconds(2000), warmup_timed_out);
+                if (warmup_timed_out || !msg) {
                     fprintf(stderr, "Warmup frame %d/%d timed out\n", i + 1, warmup_frames);
                 }
             }
@@ -301,9 +307,10 @@ void OakDPipeline::stop() {
 std::optional<CapturedFrame> OakDPipeline::poll_frame(unsigned int timeout_ms) {
     try {
         // Get synchronized color + depth frame group
-        auto msg_group = sync_queue_->tryGet<dai::MessageGroup>(
-            std::chrono::milliseconds(timeout_ms));
-        if (!msg_group) {
+        bool timed_out = false;
+        auto msg_group = sync_queue_->get<dai::MessageGroup>(
+            std::chrono::milliseconds(timeout_ms), timed_out);
+        if (timed_out || !msg_group) {
             return std::nullopt;  // Timeout
         }
 
