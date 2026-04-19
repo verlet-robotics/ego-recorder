@@ -291,8 +291,8 @@ static int run_preview(int argc, char* argv[]) {
         else if (arg == "--camera-type") { config.camera_type = next(); }
     }
 
-    const int fw = config.frame_width;
-    const int fh = config.frame_height;
+    int fw = config.frame_width;
+    int fh = config.frame_height;
 
     // Signal handling
     std::atomic<bool> shutdown_flag{false};
@@ -315,6 +315,22 @@ static int run_preview(int argc, char* argv[]) {
         }
     }
     if (shutdown_flag.load() || !camera) return 0;
+
+    // Sync fw/fh to what the camera actually produces. Some pipelines (e.g.
+    // OAK-D Wide) snap to a 4:3 aspect internally to preserve full sensor
+    // FOV, so the frames arriving at the encoder are taller than requested.
+    {
+        auto ci = camera->color_intrinsics();
+        if (ci.width > 0 && ci.height > 0 && (ci.width != fw || ci.height != fh)) {
+            fprintf(stderr, "[preview] Camera returned %dx%d (requested %dx%d); "
+                    "encoder will use actual dimensions.\n",
+                    ci.width, ci.height, fw, fh);
+            fw = ci.width;
+            fh = ci.height;
+            config.frame_width  = fw;
+            config.frame_height = fh;
+        }
+    }
 
     fprintf(stderr, "[preview] Camera: %s (USB %s)\n",
             camera->serial_number().c_str(), camera->usb_type().c_str());
@@ -998,6 +1014,21 @@ int main(int argc, char* argv[]) {
             camera = create_camera(cam_type);
             camera->configure_and_start(config.frame_width, config.frame_height,
                                         config.warmup_frames);
+        }
+
+        // Sync frame_width/frame_height to what the camera actually produces.
+        // OAK-D Wide snaps to 4:3 internally to preserve full sensor FOV, so
+        // the frames arriving at the encoder may be taller than requested.
+        {
+            auto ci = camera->color_intrinsics();
+            if (ci.width > 0 && ci.height > 0 &&
+                (ci.width != config.frame_width || ci.height != config.frame_height)) {
+                fprintf(stderr, "Camera returned %dx%d (requested %dx%d); "
+                        "encoder will use actual dimensions.\n",
+                        ci.width, ci.height, config.frame_width, config.frame_height);
+                config.frame_width  = ci.width;
+                config.frame_height = ci.height;
+            }
         }
 
         const int fw = config.frame_width;
